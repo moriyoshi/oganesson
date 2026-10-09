@@ -1,0 +1,7 @@
+# build output
+dist/
+# router generator temp files
+.tanstack/
+
+# dependencies
+node_modules/

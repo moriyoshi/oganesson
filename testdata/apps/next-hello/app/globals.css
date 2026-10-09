@@ -1,0 +1,4 @@
+@import "./theme.css";
+
+body { font-family: system-ui, sans-serif; margin: 2rem; }
+header { color: var(--accent); background: url("./dot.svg") no-repeat left center; padding-left: 12px; }

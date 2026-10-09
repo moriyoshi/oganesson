@@ -1,0 +1,13 @@
+---
+const { start = 1 } = Astro.props;
+---
+<button id="inc" data-start={start}>count {start}</button>
+<script>
+  // Bundled by Vite and loaded as a module.
+  const b = document.getElementById("inc")!;
+  let n = Number(b.dataset.start);
+  b.addEventListener("click", () => (b.textContent = `count ${++n}`));
+</script>
+<style>
+  button { color: rgb(1, 99, 2); }
+</style>

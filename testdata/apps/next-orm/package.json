@@ -1,0 +1,32 @@
+{
+  "name": "next-orm",
+  "private": true,
+  "scripts": {
+    "build": "prisma generate && prisma generate --config prisma-pg.config.ts && next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "7.10.0",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3",
+    "kysely": "0.29.6",
+    "mysql2": "3.24.5",
+    "next": "16.3.8",
+    "pg": "8.23.1",
+    "postgres": "3.4.9",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "reflect-metadata": "0.2.2",
+    "typeorm": "1.1.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7",
+    "@types/node": "^22",
+    "@types/pg": "^8",
+    "@types/react": "^19",
+    "prisma": "7.10.0",
+    "typescript": "^5"
+  }
+}

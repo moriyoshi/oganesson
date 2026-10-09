@@ -1,0 +1,9 @@
+.base {
+  color: teal;
+}
+
+.badge {
+  composes: base;
+  composes: pill from "../styles/shared.module.css";
+  padding: 2px;
+}

@@ -1,0 +1,14 @@
+{
+  "name": "next-cache",
+  "private": true,
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/react": "^19",
+    "@types/node": "^22"
+  }
+}

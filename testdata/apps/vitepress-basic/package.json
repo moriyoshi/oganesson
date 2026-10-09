@@ -1,0 +1,11 @@
+{
+  "name": "vitepress-basic",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vitepress build ."
+  },
+  "devDependencies": {
+    "vitepress": "2.0.0-alpha.20"
+  }
+}

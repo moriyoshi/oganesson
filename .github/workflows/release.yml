@@ -1,0 +1,152 @@
+# Publishes og for every supported platform and deploys the documentation to
+# GitHub Pages when a v* tag is pushed, after the full CI gate passes on the
+# tagged commit.
+#
+# Each archive holds og, LICENSE, README.md, and THIRD_PARTY_NOTICES.txt
+# (the licenses and notices of everything linked or embedded into og, the
+# same text `og licenses` prints; CI keeps it current).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # Waits for every job in ci.yml (lint and test).
+  build:
+    name: Build release archives
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: ./.github/actions/typescript
+
+      # Everything is written under $RUNNER_TEMP: an untracked file in the
+      # checkout would stamp the binary as vcs.modified ("-dirty"), and
+      # `og build -target` only accepts runtimes from the same clean source.
+      # One job intentionally builds every target so checkout, Go setup,
+      # TypeScript-Go synchronization, module downloads and Go's build cache
+      # are shared across the six builds.
+      - name: Build and package
+        run: |
+          mkdir -p "$RUNNER_TEMP/dist"
+          for target in \
+            linux/amd64 linux/arm64 \
+            darwin/amd64 darwin/arm64 \
+            windows/amd64 windows/arm64
+          do
+            goos=${target%/*}
+            goarch=${target#*/}
+            exe=og; [ "$goos" = windows ] && exe=og.exe
+            name="og-${GITHUB_REF_NAME}-${goos}-${goarch}"
+            stage="$RUNNER_TEMP/$name"
+            mkdir -p "$stage"
+
+            # The tag is og's module version: og build -eject pins it.
+            OG_VERSION="$GITHUB_REF_NAME" scripts/build-og.sh "$stage/$exe" "$target"
+
+            # Check the binary itself before archiving it. This catches a
+            # target-label regression or accidentally dropped release flags.
+            metadata=$(go version -m "$stage/$exe")
+            printf '%s\n' "$metadata"
+            for setting in "GOOS=$goos" "GOARCH=$goarch" "CGO_ENABLED=0" '-tags=nodynamic'; do
+              printf '%s\n' "$metadata" | grep -Fq -- "$setting" || {
+                echo "::error::built binary is missing build setting $setting"
+                exit 1
+              }
+            done
+
+            cp LICENSE README.md runtime/notices/THIRD_PARTY_NOTICES.txt "$stage/"
+
+            cd "$RUNNER_TEMP"
+            if [ "$goos" = windows ]; then
+              zip -qr "dist/$name.zip" "$name"
+            else
+              tar -czf "dist/$name.tar.gz" "$name"
+            fi
+            cd "$GITHUB_WORKSPACE"
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=
+          case "$GITHUB_REF_NAME" in *-*) prerelease=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $prerelease
+
+  build-docs:
+    name: Build documentation
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Install documentation dependencies
+        working-directory: docs
+        run: npm ci
+      - name: Build documentation
+        working-directory: docs
+        # The configured custom domain serves this site at its root.
+        run: npm run build -- --base /
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs/.vitepress/dist
+
+  deploy-docs:
+    name: Deploy documentation
+    needs: build-docs
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

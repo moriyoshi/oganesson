@@ -1,0 +1,58 @@
+Oganesson
+Copyright (c) 2026 Moriyoshi Koizumi
+
+Oganesson is licensed under the MIT License. See the LICENSE file.
+
+This product includes third-party software. Each third-party component is
+distributed under its own license. The complete and authoritative license
+texts for every component linked into or embedded in the `og` binary are
+reproduced in:
+
+    runtime/notices/THIRD_PARTY_NOTICES.txt
+
+That file is generated reproducibly by scripts/collect-notices.sh (run as
+`go generate ./runtime/notices`) and is embedded into og; print it with
+`og licenses`. Binaries built with `og build -o` reproduce it too
+(`<app> -licenses`), as do modules produced by `og build -eject`, and those
+additionally append the licenses of the npm packages bundled into the app.
+
+The principal third-party components and their licenses are listed below. This
+list is a summary for convenience; THIRD_PARTY_NOTICES.txt is authoritative and
+complete.
+
+Go toolchain and standard library
+  - The Go programming language (BSD-3-Clause).
+
+Go modules linked into og
+  - TypeScript-Go (github.com/microsoft/TypeScript) under Apache-2.0. Its
+    NOTICE.txt is reproduced in THIRD_PARTY_NOTICES.txt, as Apache-2.0
+    section 4(d) requires.
+  - Sobek (github.com/grafana/sobek), the JavaScript engine, under MIT.
+  - esbuild (github.com/evanw/esbuild) under MIT.
+  - wazero (github.com/tetratelabs/wazero), the WebAssembly runtime, under
+    Apache-2.0.
+  - Database drivers including pgx (github.com/jackc/pgx, MIT) and
+    go-sql-driver/mysql (MPL-2.0).
+  - The golang.org/x libraries (image, mod, net, sync, sys, term, text) under
+    BSD-3-Clause.
+  - Further modules under MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and
+    MPL-2.0; see the full file for each.
+
+Vendored Go (third_party/)
+  - The `require` implementation from goja_nodejs
+    (github.com/dop251/goja_nodejs), rewritten for Sobek, under MIT.
+
+Vendored JavaScript (rewritten or bundled into og at build time)
+  - unenv, pathe, web-streams-polyfill, readable-stream, string_decoder,
+    http-parser-js, Node's own modules, acorn, regexp-tree, the @jridgewell/*
+    source-map libraries, napi-wasm and the FormatJS Intl polyfills
+    (@formatjs/*), all under the MIT License; regexp-match-indices under
+    Apache-2.0; and minimatch under the Blue Oak Model License 1.0.0. See the
+    full file for each.
+
+Generated data
+  - Unicode emoji data (runtime/webapi/emoji_tables.go), derived from the
+    Unicode Character Database, under the Unicode license.
+
+For the exact and complete license texts, see
+runtime/notices/THIRD_PARTY_NOTICES.txt.

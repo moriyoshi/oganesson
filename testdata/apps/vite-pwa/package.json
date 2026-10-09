@@ -1,0 +1,6 @@
+{
+  "name": "vite-pwa",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "vite-plugin-pwa": "2.0.0", "workbox-window": "7.4.1", "vite": "8.3.3", "typescript": "^5" }
+}

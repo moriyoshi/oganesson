@@ -1,0 +1,27 @@
+/third_party/typescript/
+node_modules/
+/third_party/wpt/
+/third_party/next.js/
+.og/
+.playwright-mcp/
+# Local `og` build at the repo root (build outputs belong under .agents-workspace/tmp)
+/og
+!/runtime/webapi/js/vendor/node_modules/
+.DS_Store
+# SQLite files left behind by fixture test runs
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+# spikes/ holds throwaway feasibility experiments. Only the two spikes that
+# shipped code references as provenance/regeneration tools are tracked:
+# spikes/esbuild-define-race (internal/frameworks/vite/esbuild.go) and
+# spikes/m0/features (internal/gojatarget/gojatarget.go).
+/spikes/*
+!/spikes/esbuild-define-race/
+!/spikes/m0/
+/spikes/m0/*
+!/spikes/m0/features/
+# Stray generated app types if `og` is run with the repo root as cwd (the
+# root is not an app; fixtures and docs/ legitimately keep their own).
+/og-env.d.ts

@@ -1,0 +1,13 @@
+/* Tailwind v4 through postcss.config.mjs (see TestPostCSS). source("..")
+   scans app/: Tailwind's automatic detection only honors .gitignore (and
+   skips node_modules) at a git repository root, and this fixture lives
+   inside Oganesson's repository. */
+@import "tailwindcss" source("..");
+
+@theme {
+  --color-brand: #0b7285;
+}
+
+.about-note {
+  @apply text-brand font-bold;
+}

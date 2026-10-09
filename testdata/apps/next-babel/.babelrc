@@ -1,0 +1,4 @@
+{
+  "presets": ["next/babel"],
+  "plugins": ["./lib/babel-plugin-og-mark.js"]
+}

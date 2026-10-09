@@ -1,0 +1,21 @@
+// A second Prisma 7 client, for PostgreSQL over @prisma/adapter-pg (og's native
+// pg shim). Generated to ../generated/prisma-pg by a second `prisma generate`
+// in the build script. Scalar columns only (Int/String/Boolean): og's pg shim
+// parses values Go-side by OID, which coincides with node-pg's text parsers for
+// these types; temporal/numeric/bytea fidelity through adapter-pg's custom
+// parsers needs a raw-value shim mode (a follow-up).
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma-pg"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Widget {
+  id     Int     @id @default(autoincrement())
+  name   String
+  active Boolean @default(false)
+  qty    Int     @default(0)
+}

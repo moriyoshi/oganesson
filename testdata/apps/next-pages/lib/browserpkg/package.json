@@ -1,0 +1,6 @@
+{
+  "name": "browserpkg",
+  "private": true,
+  "main": "index.js",
+  "browser": { "buffer": false }
+}

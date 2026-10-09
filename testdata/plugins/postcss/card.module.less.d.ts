@@ -1,0 +1,1 @@
+declare const content: Record<"card" | "title", string>; export default content;

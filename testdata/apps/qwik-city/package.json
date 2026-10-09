@@ -1,0 +1,33 @@
+{
+  "name": "qwik-city-fixture",
+  "scripts": {
+    "build": "qwik build",
+    "build.client": "vite build",
+    "build.preview": "vite build --ssr src/entry.preview.tsx",
+    "build.types": "tsc --incremental --noEmit",
+    "dev": "vite --mode ssr",
+    "preview": "qwik build preview && vite preview --open",
+    "start": "vite --open --mode ssr",
+    "deploy": "echo 'Run \"npm run qwik add\" to install a server adapter'",
+    "qwik": "qwik",
+    "build.server": "qwik check-client src dist && vite build -c adapters/node-server/vite.config.ts",
+    "serve": "node server/entry.node-server"
+  },
+  "devDependencies": {
+    "@builder.io/qwik": "1.20.2",
+    "@builder.io/qwik-city": "1.20.2",
+    "typescript": "5.4.5",
+    "vite": "7.3.7",
+    "vite-tsconfig-paths": "4.3.2",
+    "@types/node": "20.19.0"
+  },
+  "engines": {
+    "node": "^18.17.0 || ^20.3.0 || >=21.0.0",
+    "npm": ">=10.0.0",
+    "pnpm": ">=8.0.0",
+    "yarn": ">=3.0.0"
+  },
+  "engines-annotation": "Mostly required by sharp which needs a Node-API v9 compatible runtime",
+  "private": true,
+  "type": "module"
+}

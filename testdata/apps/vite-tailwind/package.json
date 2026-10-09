@@ -1,0 +1,6 @@
+{
+  "name": "vite-tailwind",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "@tailwindcss/vite": "4.3.3", "tailwindcss": "4.3.3", "vite": "8.3.3" }
+}

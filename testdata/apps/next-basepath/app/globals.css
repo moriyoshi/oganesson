@@ -1,0 +1,4 @@
+/* A url() asset: emitted under /_next/static/media, prefixed with basePath. */
+body {
+  background: url("./dot.png");
+}

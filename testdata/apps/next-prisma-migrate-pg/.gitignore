@@ -1,0 +1,4 @@
+migrate.db*
+generated/
+.next/
+.og/

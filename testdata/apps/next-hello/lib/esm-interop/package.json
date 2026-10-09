@@ -1,0 +1,5 @@
+{
+  "name": "esm-interop",
+  "private": true,
+  "type": "module"
+}

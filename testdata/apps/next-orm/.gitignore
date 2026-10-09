@@ -1,0 +1,5 @@
+notes.db*
+migrate.db*
+typeorm.db*
+prisma.db*
+generated/

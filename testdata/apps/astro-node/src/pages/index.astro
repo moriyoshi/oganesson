@@ -1,0 +1,14 @@
+---
+const q = Astro.url.searchParams.get("q") ?? "none";
+const ua = Astro.request.headers.get("user-agent") ?? "";
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Astro SSR on Oganesson</title></head>
+  <body>
+    <h1 id="hello">Rendered per request</h1>
+    <p id="q">q={q}</p>
+    <p id="ua">{ua.length > 0 ? "has user-agent" : "no user-agent"}</p>
+    <a href="/static/" id="to-static">static</a>
+  </body>
+  <style>h1 { color: rgb(3, 4, 5); }</style>
+</html>

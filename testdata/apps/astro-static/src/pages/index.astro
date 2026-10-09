@@ -1,0 +1,10 @@
+---
+import Base from "../layouts/Base.astro";
+import Counter from "../components/Counter.astro";
+const items = ["alpha", "beta"].map((s) => s.toUpperCase());
+---
+<Base title="Astro on Oganesson">
+  <h1 id="hello">Hello from Astro</h1>
+  <ul>{items.map((i) => <li class="item">{i}</li>)}</ul>
+  <Counter start={5} />
+</Base>

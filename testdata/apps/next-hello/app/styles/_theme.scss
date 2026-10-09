@@ -1,0 +1,9 @@
+$accent: #7928ca;
+
+// The url() is relative to this partial; resolve-url-loader rebases it onto
+// the file that @uses the partial.
+@mixin card {
+  border: 2px solid $accent;
+  padding: 4px;
+  background: url("./stripe.svg") no-repeat right top;
+}

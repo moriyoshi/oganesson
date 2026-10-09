@@ -1,0 +1,14 @@
+---
+// Markdown pages pass their frontmatter.
+const { title = Astro.props.frontmatter?.title } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <nav><a href="/" id="to-home">home</a> · <a href="/about/" id="to-about">about</a></nav>
+    <slot />
+  </body>
+</html>

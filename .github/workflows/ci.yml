@@ -1,0 +1,167 @@
+# The quality gate (.agents/docs/QUALITY_GATE.md) on every push and pull
+# request: lint and tests only, on Linux; nothing is built here. Release
+# (release.yml) calls it and builds only after both jobs pass.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (gofmt, vet, generated code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: ./.github/actions/typescript
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal runtime pack _tsoverlay)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt -w these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet -tags nodynamic ./cmd/... ./internal/... ./runtime/... ./pack/...
+
+      # prelude.js is generated from runtime/webapi/js/src and checked in.
+      - name: prelude.js is up to date
+        working-directory: runtime/webapi
+        run: |
+          go run ./internal/genprelude
+          git diff --exit-code -- prelude.js || {
+            echo "::error::runtime/webapi/prelude.js is stale; run go generate ./runtime/webapi/"
+            exit 1
+          }
+
+      # Embedded into og, app binaries and ejected modules (runtime/notices).
+      - name: THIRD_PARTY_NOTICES.txt is complete and up to date
+        run: |
+          go generate ./runtime/notices
+          git diff --exit-code -- runtime/notices/THIRD_PARTY_NOTICES.txt || {
+            echo "::error::runtime/notices/THIRD_PARTY_NOTICES.txt is stale; run go generate ./runtime/notices"
+            exit 1
+          }
+
+  test:
+    name: Test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Everything outside internal/frameworks: engine, Web APIs (with the
+          # WPT subset), Node shims, KV, ISR, installer, build host, wasm.
+          - shard: core
+            packages: core
+            fixtures: testdata/apps/next-hello testdata/apps/next-pages testdata/plugins/*
+            wpt: true
+            testflags: ""
+          # internal/frameworks/next is split into four shards. The heavy
+          # build-and-serve tests dominate wall time (each runs a full Next
+          # production build in interpreted Sobek), so the ORM, Prisma, and
+          # build-fixture groups each get their own runner and everything else
+          # runs as a catch-all. Shards select by test-name prefix, so a new
+          # heavy test under an existing prefix routes automatically. Keep the
+          # catch-all -skip prefixes identical to the union of the three -run
+          # prefixes below; anything not matching a prefix lands in the catch-all.
+          - shard: next-orm
+            packages: ./internal/frameworks/next/...
+            fixtures: testdata/apps/next-*
+            testflags: "-run '^(TestORM|TestTypeORM)'"
+          - shard: next-prisma
+            packages: ./internal/frameworks/next/...
+            fixtures: testdata/apps/next-*
+            testflags: "-run '^(TestPrisma|TestLoadPrismaConfig|TestBundleMigrator)'"
+          - shard: next-build
+            packages: ./internal/frameworks/next/...
+            fixtures: testdata/apps/next-*
+            testflags: "-run '^(TestServeFixture|TestBuildFixture|TestBuildTree|TestTracedFiles|TestMissingOptionalModule)'"
+          - shard: next
+            packages: ./internal/frameworks/next/...
+            fixtures: testdata/apps/next-*
+            testflags: "-skip '^(TestORM|TestTypeORM|TestPrisma|TestLoadPrismaConfig|TestBundleMigrator|TestServeFixture|TestBuildFixture|TestBuildTree|TestTracedFiles|TestMissingOptionalModule)'"
+          - shard: vite
+            packages: ./internal/frameworks/vite/...
+            fixtures: testdata/apps/vite-* testdata/apps/tanstack-*
+            testflags: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: ./.github/actions/typescript
+
+      - name: Restore WPT
+        if: matrix.wpt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: third_party/wpt
+          key: wpt-${{ hashFiles('scripts/sync-wpt.sh') }}
+      - name: Sync WPT
+        if: matrix.wpt
+        run: scripts/sync-wpt.sh
+
+      # Fixture package.json files pin their direct dependencies exactly;
+      # transitive versions can still move, so the cache also rolls weekly.
+      - name: Week number
+        id: week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore fixture node_modules
+        id: fixtures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            testdata/apps/*/node_modules
+            testdata/plugins/*/node_modules
+          key: fixtures-${{ matrix.shard }}-${{ runner.os }}-${{ steps.week.outputs.week }}-${{ hashFiles('testdata/apps/*/package.json', 'testdata/plugins/*/package.json', 'internal/install/**', 'runtime/natives/natives.go') }}
+      - name: Install fixtures
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        run: scripts/install-fixtures.sh ${{ matrix.fixtures }}
+
+      - name: go test
+        shell: bash
+        run: |
+          if [ "${{ matrix.packages }}" = core ]; then
+            pkgs=$(go list -tags nodynamic ./cmd/... ./runtime/... ./internal/... ./pack/... | grep -v /internal/frameworks/)
+          else
+            pkgs="${{ matrix.packages }}"
+          fi
+          # No -race: the fixture suites took 10 to 25 minutes under it (see QUALITY_GATE.md).
+          set +e
+          go test -tags nodynamic -timeout 30m -v ${{ matrix.testflags }} $pkgs 2>&1 | tee "$RUNNER_TEMP/test.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "### go test (${{ matrix.shard }})"
+            echo
+            echo "Skipped tests (a skip is not a pass):"
+            echo '```'
+            grep -E '^[[:space:]]*--- SKIP' "$RUNNER_TEMP/test.log" || echo "(none)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-log-${{ matrix.shard }}
+          path: ${{ runner.temp }}/test.log
+          if-no-files-found: ignore

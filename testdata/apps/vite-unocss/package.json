@@ -1,0 +1,6 @@
+{
+  "name": "vite-unocss",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "unocss": "66.10.5", "vite": "8.3.3", "typescript": "^5" }
+}

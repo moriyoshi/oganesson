@@ -1,0 +1,11 @@
+@use "sass:color";
+@use "../styles/theme";
+
+.figure {
+  @include theme.card;
+  color: color.adjust(theme.$accent, $lightness: -10%);
+
+  .inner {
+    font-weight: bold;
+  }
+}

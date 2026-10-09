@@ -1,0 +1,7 @@
+{
+  // Shared settings: the TS transform follows "extends" (TypeScript-Go).
+  "compilerOptions": {
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false
+  }
+}
