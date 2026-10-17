@@ -129,8 +129,8 @@ Vite:
 
 ## Native Go module limits
 
-- Building a final app executable requires the Go toolchain and currently an
-  Oganesson checkout.
+- Building a final app executable requires the Go toolchain, and an Oganesson
+  checkout only when `og` is an unpublished (locally built) binary.
 - Plain directory builds and `og serve` cannot execute project-owned Go
   modules.
 - Generated TypeScript types are syntactic; foreign package types generally

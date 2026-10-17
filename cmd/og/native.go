@@ -156,13 +156,26 @@ func ogSourceDir(flagValue string) (string, error) {
 	return abs, nil
 }
 
+// goTool is the Go toolchain og compiles an app runtime with: the -go flag,
+// else $OG_GO, else "go" found on PATH. An explicit value may be a path or a
+// name; exec.LookPath resolves and validates either.
+func goTool(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if v := os.Getenv("OG_GO"); v != "" {
+		return v
+	}
+	return "go"
+}
+
 // buildNativeRuntime builds, into out, the executable an app with the
 // project's native modules is packaged with, for goos/goarch, with the
-// local Go toolchain.
-func buildNativeRuntime(ctx context.Context, proj *nativegen.Project, source, goos, goarch, out string) error {
-	gobin, err := exec.LookPath("go")
+// gotool Go toolchain.
+func buildNativeRuntime(ctx context.Context, gotool string, proj *nativegen.Project, source, goos, goarch, out string) error {
+	gobin, err := exec.LookPath(gotool)
 	if err != nil {
-		return fmt.Errorf("the project has native Go modules (%s/): building its binary needs the Go toolchain on PATH", nativegen.Dir)
+		return fmt.Errorf("the project has native Go modules (%s/): building its binary needs the Go toolchain (%s)", nativegen.Dir, gotool)
 	}
 	version := ogModuleVersion()
 	if source == "" && strings.HasPrefix(version, "v0.0.0-") {
@@ -183,8 +196,17 @@ func buildNativeRuntime(ctx context.Context, proj *nativegen.Project, source, go
 		return err
 	}
 	files := map[string][]byte{"go.mod": mod.Bytes(), "main.go": []byte(nativeMain), nativeGlueFile: glue}
+	return goBuildModule(ctx, gobin, dir, source, files, goos, goarch, out)
+}
+
+// goBuildModule writes the generated module files into dir and builds it into
+// out for goos/goarch with the local Go toolchain. The flags match
+// scripts/build-og.sh (CGO off, -tags nodynamic, stripped with -ldflags
+// "-s -w") since the result stands in for an og built that way; pclntab stays,
+// so stack traces keep file:line. When source is an Oganesson checkout, its
+// go.sum spares go mod tidy most lookups.
+func goBuildModule(ctx context.Context, gobin, dir, source string, files map[string][]byte, goos, goarch, out string) error {
 	if source != "" {
-		// Oganesson's checksums spare go mod tidy most lookups.
 		if b, err := os.ReadFile(filepath.Join(source, "go.sum")); err == nil {
 			files["go.sum"] = b
 		}
@@ -212,5 +234,66 @@ func buildNativeRuntime(ctx context.Context, proj *nativegen.Project, source, go
 	if err != nil {
 		return err
 	}
-	return run("build", "-trimpath", "-tags", "nodynamic", "-o", abs, ".")
+	return run("build", "-trimpath", "-tags", "nodynamic", "-ldflags", "-s -w", "-o", abs, ".")
+}
+
+// slimGoMod is the go.mod of a slim runtime module: it requires only
+// Oganesson, so the built binary links the serve path (runtime/app) and none
+// of og's build-time toolchain (the TypeScript compiler, the bundler). Like
+// nativeGoMod it re-declares the TypeScript submodule replacement when
+// building against a checkout, because Go ignores a dependency's own replace
+// directives.
+var slimGoMod = template.Must(template.New("").Parse(`module ogapp
+
+go 1.27.0
+
+require github.com/moriyoshi/oganesson {{.Version}}
+{{- if .Source}}
+
+replace (
+	github.com/moriyoshi/oganesson => {{.Source}}
+	github.com/microsoft/TypeScript/tsc => {{.Source}}/third_party/typescript/tsc
+)
+{{- end}}
+`))
+
+// slimRuntimeReason reports why a slim serve-only runtime cannot be built for
+// this og, or "" when one can. og build -o packages an ordinary (no native
+// module) app with a slim runtime when possible, and otherwise copies the
+// whole og; the reason is surfaced so the larger binary is not a surprise. The
+// conditions mirror buildNativeRuntime: the Go toolchain must be on PATH, and
+// an unpublished og (a pseudo-version) resolves its own module only from a
+// checkout (-og-source / OG_SOURCE).
+func slimRuntimeReason(source, gotool string) string {
+	if _, err := exec.LookPath(gotool); err != nil {
+		return fmt.Sprintf("the Go toolchain (%s) is not available", gotool)
+	}
+	if source == "" && strings.HasPrefix(ogModuleVersion(), "v0.0.0-") {
+		return "this og is an unpublished build and -og-source/OG_SOURCE is unset"
+	}
+	return ""
+}
+
+// buildSlimRuntime builds, into out, a serve-only runtime for goos/goarch: the
+// same main (nativeMain) a native app uses, but with no project module and no
+// glue, so it links runtime/app and not og's TypeScript compiler or bundler.
+// og build -o packages an ordinary app with this instead of copying the whole
+// og, which is far larger. Callers gate on slimRuntimeReason first, so the Go
+// toolchain and a resolvable og module are already assured.
+func buildSlimRuntime(ctx context.Context, gotool, source, goos, goarch, out string) error {
+	gobin, err := exec.LookPath(gotool)
+	if err != nil {
+		return fmt.Errorf("building a slim runtime needs the Go toolchain (%s)", gotool)
+	}
+	dir, err := os.MkdirTemp("", "og-slim-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	var mod bytes.Buffer
+	if err := slimGoMod.Execute(&mod, map[string]any{"Version": ogModuleVersion(), "Source": source}); err != nil {
+		return err
+	}
+	files := map[string][]byte{"go.mod": mod.Bytes(), "main.go": []byte(nativeMain)}
+	return goBuildModule(ctx, gobin, dir, source, files, goos, goarch, out)
 }

@@ -13,6 +13,10 @@
 #   always uses its bundled pure-Go build, so the binary behaves the same on
 #   every host.
 # - -trimpath: no build-machine paths in the binary.
+# - -ldflags "-s -w": drop the symbol table and DWARF debug info. og build -o
+#   copies this binary into every packaged app, so the ~30% it saves applies to
+#   both the release og and every shipped app. Stack traces keep file:line from
+#   runtime.pclntab, which -w does not strip.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:-"$root/.agents-workspace/tmp/og"}
@@ -28,5 +32,5 @@ if [ -n "$version" ] && ! printf '%s\n' "$version" | grep -Eq '^v(0|[1-9][0-9]*)
   exit 1
 fi
 cd "$root"
-CGO_ENABLED=0 go build -trimpath -tags nodynamic -ldflags "-X main.version=$version" -o "$out" ./cmd/og
+CGO_ENABLED=0 go build -trimpath -tags nodynamic -ldflags "-s -w -X main.version=$version" -o "$out" ./cmd/og
 echo "built $out${version:+ $version}${target:+ ($target)}"
