@@ -1,0 +1,35 @@
+# Shared code can affect every suite. Framework adapters are also imported by
+# cmd/og in core, so keep code changes on the full gate. Match embedded assets,
+# module metadata, generators and vendored inputs as well as Go source.
+lint: &code
+  - '.github/**'
+  - 'go.mod'
+  - 'go.sum'
+  - 'go.work*'
+  - '**/*.go'
+  - 'cmd/**'
+  - 'internal/**'
+  - 'runtime/**'
+  - 'pack/**'
+  - '_tsoverlay/**'
+  - 'third_party/**'
+  - 'scripts/**'
+  - 'LICENSE*'
+
+# Core includes CLI and build-host tests consuming both Next and Vite apps.
+core:
+  - *code
+  - 'testdata/**'
+
+# Test-name shards and their commands live in ci-test-matrix.json. Keep the
+# next catch-all -skip prefixes equal to the union of the other Next -run lists.
+next:
+  - *code
+  - 'testdata/apps/next-*/**'
+  - 'testdata/plugins/**'
+  - 'testdata/compat/**'
+
+vite:
+  - *code
+  - 'testdata/apps/!(next-*)/**'
+  - 'testdata/plugins/**'
