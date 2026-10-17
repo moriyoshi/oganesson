@@ -401,3 +401,25 @@ adapter + `mariadb`, the build regenerates the client.
   the missing acknowledgements section was reintroduced.
 - Verification compared the restored section with `5532d27:README.md` and
   checked the documentation tree for decomposed Japanese characters.
+
+## 2026-10-18 - Path-filtered GitHub Actions CI
+
+- Added SHA-pinned `dorny/paths-filter` v4.0.0 to `ci.yml`. PR file-list read
+  permission is scoped to the selection job; `release.yml` grants the matching
+  permission to its reusable CI call. Branch pushes compare with the pre-push
+  commit. Tags and manual runs bypass filtering and retain the full gate.
+- `.github/ci-paths.yml` skips lint and tests for documentation-only changes.
+  Source, embedded assets, modules, vendored inputs, scripts, licenses, and CI
+  configuration select the full gate. Framework source changes retain core
+  coverage because the CLI imports both adapters.
+- Fixture-only changes select core and the applicable framework shards; WPT
+  expectations select core alone. `.github/ci-test-matrix.json` preserves the
+  previous six shard definitions exactly. A job condition guards empty matrices.
+- Verification: YAML/JSON parsing, `bash -n` for workflow shell snippets,
+  16 picomatch path cases with dot matching, and six executions of the actual
+  matrix-selection step, including empty selection and forced full execution.
+  Neutralizing Vite's shared-runtime filter fails the same dependency assertion.
+  The extracted matrix equals the original workflow matrix; `git diff --check`
+  and the decomposed-kana scan pass. GitHub-hosted execution remains unverified;
+  actionlint is unavailable locally. No Go files changed; Go tests were not run.
+- Checked TODO.md: no matching open item or new follow-up.

@@ -1,6 +1,5 @@
-# The quality gate (.agents/docs/QUALITY_GATE.md) on every push and pull
-# request: lint and tests only, on Linux; nothing is built here. Release
-# (release.yml) calls it and builds only after both jobs pass.
+# Run the relevant quality-gate jobs on pushes and pull requests. Manual
+# runs and release calls always run the full gate before building archives.
 name: CI
 
 on:
@@ -18,7 +17,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Select CI jobs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      lint: ${{ steps.select.outputs.lint }}
+      tests: ${{ steps.select.outputs.tests }}
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@9d7afb8d214ad99e78fbd4247752c4caed2b6e4c # v4.0.0
+        id: paths
+        # Tags and workflow_dispatch deliberately bypass change detection.
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch')
+        with:
+          # PRs use the API; branch pushes compare with the pre-push commit.
+          base: ${{ github.ref }}
+          filters: .github/ci-paths.yml
+      - name: Select lint and test matrix
+        id: select
+        env:
+          FULL_GATE: ${{ github.event_name != 'pull_request' && (github.event_name != 'push' || github.ref_type != 'branch') }}
+          CHANGES: ${{ steps.paths.outputs.changes }}
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          import os
+
+          full = os.environ['FULL_GATE'] == 'true'
+          changes = set(json.loads(os.environ['CHANGES'] or '[]'))
+          with open('.github/ci-test-matrix.json') as source:
+              matrix = json.load(source)
+          # Next's four test-name shards all share the same dependency filter.
+          matrix['include'] = [entry for entry in matrix['include']
+                               if full or entry['shard'].split('-')[0] in changes]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('lint=' + str(full or 'lint' in changes).lower(), file=output)
+              print('tests=' + str(bool(matrix['include'])).lower(), file=output)
+              print('matrix=' + json.dumps(matrix, separators=(',', ':')), file=output)
+          PYCODE
+
   lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
     name: Lint (gofmt, vet, generated code)
     runs-on: ubuntu-latest
     steps:
@@ -60,47 +104,13 @@ jobs:
           }
 
   test:
+    needs: changes
+    if: needs.changes.outputs.tests == 'true'
     name: Test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # Everything outside internal/frameworks: engine, Web APIs (with the
-          # WPT subset), Node shims, KV, ISR, installer, build host, wasm.
-          - shard: core
-            packages: core
-            fixtures: testdata/apps/next-hello testdata/apps/next-pages testdata/plugins/*
-            wpt: true
-            testflags: ""
-          # internal/frameworks/next is split into four shards. The heavy
-          # build-and-serve tests dominate wall time (each runs a full Next
-          # production build in interpreted Sobek), so the ORM, Prisma, and
-          # build-fixture groups each get their own runner and everything else
-          # runs as a catch-all. Shards select by test-name prefix, so a new
-          # heavy test under an existing prefix routes automatically. Keep the
-          # catch-all -skip prefixes identical to the union of the three -run
-          # prefixes below; anything not matching a prefix lands in the catch-all.
-          - shard: next-orm
-            packages: ./internal/frameworks/next/...
-            fixtures: testdata/apps/next-*
-            testflags: "-run '^(TestORM|TestTypeORM)'"
-          - shard: next-prisma
-            packages: ./internal/frameworks/next/...
-            fixtures: testdata/apps/next-*
-            testflags: "-run '^(TestPrisma|TestLoadPrismaConfig|TestBundleMigrator)'"
-          - shard: next-build
-            packages: ./internal/frameworks/next/...
-            fixtures: testdata/apps/next-*
-            testflags: "-run '^(TestServeFixture|TestBuildFixture|TestBuildTree|TestTracedFiles|TestMissingOptionalModule)'"
-          - shard: next
-            packages: ./internal/frameworks/next/...
-            fixtures: testdata/apps/next-*
-            testflags: "-skip '^(TestORM|TestTypeORM|TestPrisma|TestLoadPrismaConfig|TestBundleMigrator|TestServeFixture|TestBuildFixture|TestBuildTree|TestTracedFiles|TestMissingOptionalModule)'"
-          - shard: vite
-            packages: ./internal/frameworks/vite/...
-            fixtures: testdata/apps/vite-* testdata/apps/tanstack-*
-            testflags: ""
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

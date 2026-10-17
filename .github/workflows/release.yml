@@ -16,6 +16,10 @@ permissions:
 
 jobs:
   ci:
+    # Allow the reusable workflow's change detector to read PR file lists.
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/ci.yml
 
   # Waits for every job in ci.yml (lint and test), then builds the independent

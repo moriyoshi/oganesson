@@ -1,0 +1,41 @@
+{
+  "include": [
+    {
+      "shard": "core",
+      "packages": "core",
+      "fixtures": "testdata/apps/next-hello testdata/apps/next-pages testdata/plugins/*",
+      "wpt": true,
+      "testflags": ""
+    },
+    {
+      "shard": "next-orm",
+      "packages": "./internal/frameworks/next/...",
+      "fixtures": "testdata/apps/next-*",
+      "testflags": "-run '^(TestORM|TestTypeORM)'"
+    },
+    {
+      "shard": "next-prisma",
+      "packages": "./internal/frameworks/next/...",
+      "fixtures": "testdata/apps/next-*",
+      "testflags": "-run '^(TestPrisma|TestLoadPrismaConfig|TestBundleMigrator)'"
+    },
+    {
+      "shard": "next-build",
+      "packages": "./internal/frameworks/next/...",
+      "fixtures": "testdata/apps/next-*",
+      "testflags": "-run '^(TestServeFixture|TestBuildFixture|TestBuildTree|TestTracedFiles|TestMissingOptionalModule)'"
+    },
+    {
+      "shard": "next",
+      "packages": "./internal/frameworks/next/...",
+      "fixtures": "testdata/apps/next-*",
+      "testflags": "-skip '^(TestORM|TestTypeORM|TestPrisma|TestLoadPrismaConfig|TestBundleMigrator|TestServeFixture|TestBuildFixture|TestBuildTree|TestTracedFiles|TestMissingOptionalModule)'"
+    },
+    {
+      "shard": "vite",
+      "packages": "./internal/frameworks/vite/...",
+      "fixtures": "testdata/apps/vite-* testdata/apps/tanstack-*",
+      "testflags": ""
+    }
+  ]
+}
