@@ -52,11 +52,12 @@ single executable, an ejected Go module, or both.
 
 | Option | Meaning |
 |--------|---------|
-| `-o path` | Also write a self-contained application executable. |
-| `-target goos/goarch` | Target platform for `-o`; defaults to the host. |
-| `-runtime path` | Use this target-platform `og` executable instead of the runtime cache. The runtime must be CGO-free, target the requested platform, and come from the same Oganesson source revision. |
+| `-o path` | Also write a self-contained application executable. With the Go toolchain on `PATH`, it embeds a slim serve-only runtime (much smaller); without Go it copies the whole `og` and prints a note. |
+| `-target goos/goarch` | Target platform for `-o`; defaults to the host. With Go, the slim runtime is cross-compiled for it directly; otherwise `-runtime` or the runtime cache supplies one. |
+| `-runtime path` | Package this target-platform `og` executable verbatim instead of building or caching a runtime. It must be CGO-free, target the requested platform, and come from the same Oganesson source revision. |
 | `-eject dir` | Also write a standalone Go module containing the built application. |
-| `-og-source path` | Oganesson checkout used by an ejected module or by a binary with project-owned Go modules. Defaults to `OG_SOURCE`. |
+| `-og-source path` | Oganesson checkout to build against. Needed only for an unpublished (locally built) `og`; a released `og` resolves itself from the module proxy. Used by an ejected module, the slim runtime, and a binary with project-owned Go modules. Defaults to `OG_SOURCE`. |
+| `-go path` | Go toolchain that compiles the `-o` runtime, a path or a name on `PATH`. Defaults to `OG_GO`, then `go`. |
 | `-readable` | Leave browser JavaScript and stylesheets unminified. |
 
 `-target` and `-runtime` require `-o`. A project containing native Go modules is

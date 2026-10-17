@@ -26,9 +26,19 @@ og build -o ./my-app ./project
 ./my-app -addr :3000
 ```
 
-Oganesson copies a compatible `og` runtime and appends the `.og/` payload as a
-zip followed by an `OGPAYLD1` trailer. At startup the executable discovers its
-own payload and becomes the application server.
+Oganesson appends the `.og/` payload to a runtime executable as a zip followed
+by an `OGPAYLD1` trailer. At startup the executable discovers its own payload
+and becomes the application server.
+
+For the runtime, Oganesson prefers a slim serve-only binary: when the Go
+toolchain is on `PATH` it compiles a runtime that links only what serves the
+app, leaving out `og`'s build-time toolchain (chiefly the TypeScript compiler),
+which makes the artifact substantially smaller. Without Go it falls back to
+copying the whole `og` and prints a note; the application is identical either
+way, only larger. Choose a specific toolchain with `-go` (a path or a name on
+`PATH`) or `OG_GO`. A released `og` builds the slim runtime from the module proxy
+with no checkout; an unpublished (locally built) `og` needs its source, given
+with `-og-source` or `OG_SOURCE`, and copies the full `og` when neither is set.
 
 The artifact contains all framework server code, browser assets, public files,
 prerendered entries, Web/Node compatibility code, JavaScript engine, image
@@ -41,18 +51,27 @@ place.
 
 ## Cross-compilation
 
-Build a matching Oganesson runtime for the target, then package with it:
+Name the target with `-target goos/goarch`:
+
+```sh
+og build -o ./my-app -target linux/arm64 ./project
+```
+
+With the Go toolchain on `PATH`, Oganesson cross-compiles the slim runtime for
+the target directly (it is pure Go), so no prebuilt runtime is needed. An
+unpublished `og` still needs its source for this; pass `-og-source` or set
+`OG_SOURCE`.
+
+Without Go, supply a runtime built for the target. Build one and pass it with
+`-runtime`:
 
 ```sh
 scripts/build-og.sh ./og-linux-arm64 linux/arm64
-./og build \
-  -o ./my-app \
-  -target linux/arm64 \
-  -runtime ./og-linux-arm64 \
-  ./project
+og build -o ./my-app -target linux/arm64 -runtime ./og-linux-arm64 ./project
 ```
 
-Without `-runtime`, Oganesson looks in:
+`-runtime` is copied verbatim (no slim rebuild). Without it, Oganesson looks in
+the runtime cache:
 
 ```text
 <UserCacheDir>/oganesson/runtimes/<source-id>/og-<goos>-<goarch>
@@ -66,9 +85,9 @@ needed to create it. Oganesson rejects a runtime that:
 - was built with CGO; or
 - was stamped from a different source revision.
 
-Projects with native Go modules build their own target runtime and cannot use
-`-runtime`. Oganesson also builds a temporary host runtime to prerender with
-those Go modules during a cross build.
+Projects with native Go modules always compile their own target runtime (which
+needs Go) and cannot use `-runtime`. Oganesson also builds a temporary host
+runtime to prerender with those Go modules during a cross build.
 
 ## Ejected Go module
 

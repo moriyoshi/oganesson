@@ -224,8 +224,9 @@ become typed `og:<directory>` imports; Oganesson generates the JavaScript
 bridge, registration code, and TypeScript declarations. Functions accepting a
 `context.Context` can run asynchronously and receive request cancellation.
 
-The final application build needs a Go toolchain and an Oganesson checkout.
-See [Native Go modules](native-go-modules.md).
+The final application build needs the Go toolchain, and an Oganesson checkout
+only when `og` is an unpublished (locally built) binary. See
+[Native Go modules](native-go-modules.md).
 
 ### Can I add Go HTTP middleware or routes around the application?
 

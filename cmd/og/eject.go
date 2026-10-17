@@ -123,12 +123,13 @@ The {{.Name}} app, ejected from Oganesson (` + "`og build -eject`" + `).
 Build and run:
 
     go mod tidy
-    CGO_ENABLED=0 go build -trimpath -tags nodynamic -o {{.Name}} .
+    CGO_ENABLED=0 go build -trimpath -tags nodynamic -ldflags "-s -w" -o {{.Name}} .
     ./{{.Name}} -addr :3000
 
 ` + "`-tags nodynamic`" + ` keeps the image optimizer's WebP encoder pure Go (otherwise
-it loads a system libwebp when one is installed). Cross-compile with
-` + "`GOOS`/`GOARCH`" + ` as usual.
+it loads a system libwebp when one is installed). ` + "`-ldflags \"-s -w\"`" + ` drops
+the symbol table and DWARF for a smaller binary (stack traces keep file:line).
+Cross-compile with ` + "`GOOS`/`GOARCH`" + ` as usual.
 
 ` + "`./{{.Name}} -licenses`" + ` prints the licenses of Oganesson, the software it
 includes, and the npm packages bundled into the app (also in

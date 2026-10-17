@@ -28,7 +28,8 @@ func runBuild(ctx context.Context, args []string) error {
 	target := fs.String("target", "", "platform of the -o executable, as goos/goarch (default: this one)")
 	rt := fs.String("runtime", "", "og executable built for -target to package the app with (default: the runtime cache)")
 	ejectDir := fs.String("eject", "", "also write the app as a standalone Go module to this directory")
-	ogSource := fs.String("og-source", "", "an Oganesson checkout to build against: the -eject module's replace directives, and the -o executable of a project with native Go modules (default: $OG_SOURCE)")
+	ogSource := fs.String("og-source", "", "an Oganesson checkout to build against, needed only for an unpublished og: the -eject module's replace directives, the slim -o runtime, and the -o executable of a project with native Go modules (default: $OG_SOURCE)")
+	goExe := fs.String("go", "", "the Go toolchain that compiles the -o runtime, a path or a name on PATH (default: $OG_GO, else \"go\")")
 	readable := fs.Bool("readable", false, "leave browser bundles and stylesheets unminified")
 	_ = fs.Parse(args)
 	if *ogSource != "" && *ejectDir == "" && *out == "" {
@@ -48,6 +49,7 @@ func runBuild(ctx context.Context, args []string) error {
 	// Resolve the runtime first: a missing one should not cost a build.
 	var runtimeExe, prerenderExe string
 	if *out != "" {
+		gotool := goTool(*goExe)
 		goos, goarch, err := parseTarget(*target)
 		if err != nil {
 			return err
@@ -56,8 +58,31 @@ func runBuild(ctx context.Context, args []string) error {
 			*out += ".exe"
 		}
 		if natives == nil {
-			if runtimeExe, err = selectRuntime(*target, *rt); err != nil {
-				return err
+			if *rt != "" {
+				// An explicit -runtime: package the og the user named as-is.
+				if runtimeExe, err = selectRuntime(*target, *rt); err != nil {
+					return err
+				}
+			} else if source, serr := ogSourceDir(*ogSource); serr != nil {
+				return serr
+			} else if reason := slimRuntimeReason(source, gotool); reason != "" {
+				// A slim serve-only runtime needs the Go toolchain; without it,
+				// copy the whole og so the build still works with no toolchain.
+				fmt.Fprintf(os.Stderr, "note: %s; packaging the full og runtime for %s/%s (install Go for a smaller app)\n", reason, goos, goarch)
+				if runtimeExe, err = selectRuntime(*target, ""); err != nil {
+					return err
+				}
+			} else {
+				tmp, err := os.MkdirTemp("", "og-runtime-")
+				if err != nil {
+					return err
+				}
+				defer os.RemoveAll(tmp)
+				runtimeExe = filepath.Join(tmp, "app")
+				fmt.Fprintf(os.Stderr, "building a slim runtime for %s/%s\n", goos, goarch)
+				if err := buildSlimRuntime(ctx, gotool, source, goos, goarch, runtimeExe); err != nil {
+					return err
+				}
 			}
 		} else {
 			if *rt != "" {
@@ -74,7 +99,7 @@ func runBuild(ctx context.Context, args []string) error {
 			defer os.RemoveAll(tmp)
 			runtimeExe = filepath.Join(tmp, "app")
 			fmt.Fprintf(os.Stderr, "building the app's Go code (%d native module(s)) for %s/%s\n", len(natives.Modules), goos, goarch)
-			if err := buildNativeRuntime(ctx, natives, source, goos, goarch, runtimeExe); err != nil {
+			if err := buildNativeRuntime(ctx, gotool, natives, source, goos, goarch, runtimeExe); err != nil {
 				return err
 			}
 			if goos == runtime.GOOS && goarch == runtime.GOARCH {
@@ -87,7 +112,7 @@ func runBuild(ctx context.Context, args []string) error {
 				// toolchain and -og-source are already required on this path.
 				prerenderExe = filepath.Join(tmp, "prerender")
 				fmt.Fprintf(os.Stderr, "building the app's Go code for %s/%s to prerender static pages\n", runtime.GOOS, runtime.GOARCH)
-				if err := buildNativeRuntime(ctx, natives, source, runtime.GOOS, runtime.GOARCH, prerenderExe); err != nil {
+				if err := buildNativeRuntime(ctx, gotool, natives, source, runtime.GOOS, runtime.GOARCH, prerenderExe); err != nil {
 					return err
 				}
 			}

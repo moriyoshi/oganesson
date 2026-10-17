@@ -423,3 +423,73 @@ adapter + `mariadb`, the build regenerates the client.
   and the decomposed-kana scan pass. GitHub-hosted execution remains unverified;
   actionlint is unavailable locally. No Go files changed; Go tests were not run.
 - Checked TODO.md: no matching open item or new follow-up.
+
+## 2026-10-18 - Smaller `og build -o` binaries: strip + slim serve-only runtime
+
+Reduced the size of executables produced by `og build -o`. The output is a base
+`og` binary copied verbatim plus a DEFLATE-zipped payload (`pack/pack.go`); the
+base dominates (the payload is already compressed), so both levers target the
+base binary.
+
+1. Strip the base. `scripts/build-og.sh` now links with `-ldflags "-s -w"`
+   (drops the symbol table and DWARF). The release `og` and every app packaged
+   by copying it fall from ~117 MB to ~83 MB (~29%). `pclntab` stays, so stack
+   traces keep file:line. Verified `-X main.version` survives stripping
+   (`strings` finds a stamped `v9.9.9`; `go version -m` still reads it), so
+   release version burning (`release.yml` passes `OG_VERSION`) is intact. The
+   two other build sites that stood in for a stripped og got the flag too:
+   `buildNativeRuntime`'s `go build` (`cmd/og/native.go`) and the ejected
+   module's README build command (`cmd/og/eject.go`).
+
+2. Slim serve-only runtime. For an ordinary (no native module) project,
+   `og build -o` previously copied the whole `og` - including the TypeScript
+   compiler (`third_party/typescript`, ~72k symbols) and the bundler, which the
+   serving runtime never uses. It now compiles a serve-only runtime module
+   (the same `nativeMain`, no project module, no glue) that links only
+   `runtime/app`, exactly as the native-module path already did. Result: a base
+   of ~40 MB (stripped) instead of ~83 MB; a packaged `next-hello` app is
+   40.4 MB. Confirmed the slim binary links 0 TypeScript-compiler symbols,
+   retains esbuild (28 symbols - a genuine runtime dep for on-demand
+   transforms), and keeps `runtime/app`.
+
+   Delivery decision (build-on-demand, requiring Go): the slim runtime can't be
+   produced by stripping `og` (the compiler is linked in), so it is compiled on
+   demand with the Go toolchain. `slimRuntimeReason` gates it exactly like
+   `buildNativeRuntime`: Go must be resolvable, and an unpublished `og`
+   (`v0.0.0-` pseudo-version) needs its source via `-og-source`/`OG_SOURCE`
+   (a released `og` resolves itself from the module proxy). When the gate is
+   not met, og copies the full `og` and prints a one-line note - so a
+   no-toolchain build still works, just larger. Because the slim build is pure
+   Go, cross-target (`-target`) slim builds now cross-compile directly and no
+   longer need a prebuilt runtime cache; `-runtime` still copies an og verbatim
+   and the cache remains the no-Go fallback.
+
+3. Overridable toolchain. Added `-go` (a path or a name on PATH, default
+   `$OG_GO` then `go`), threaded through `buildSlimRuntime`,
+   `buildNativeRuntime`, and `slimRuntimeReason` via the new `goTool` resolver
+   (`cmd/og/native.go`). Mirrors the `-og-source`/`OG_SOURCE` convention.
+
+Refactor: extracted `goBuildModule` (`cmd/og/native.go`) - write files, `go mod
+tidy`, stripped `go build` - shared by the native and slim runtime builders.
+
+Files: `scripts/build-og.sh`, `cmd/og/build.go`, `cmd/og/native.go`,
+`cmd/og/eject.go`, `cmd/og/slim_test.go` (new). Docs: `docs/deployment.md`,
+`docs/cli.md`, `docs/getting-started.md`, `docs/can-i-do-this.md`,
+`docs/compatibility.md` (the `-og-source` / Go-toolchain framing now matches
+`native-go-modules.md`'s "until published as a resolvable Go module").
+
+Tests: `TestSlimRuntimeReason` (unit: the published/unpublished/with-source and
+missing-`-go`-toolchain decisions). `TestBuildSlimApp` (integration, gated like
+`TestBuildNativeApp`: builds `next-hello` with `-o -og-source`, asserts the
+binary carries no `lib.dom.d.ts` - the TS compiler embeds those lib files, so
+their name appears verbatim only in a full-og base, and the payload is
+DEFLATE-compressed so the marker can only surface from an uncompressed base -
+then serves `/about`). Both pass; the slim app binary was 40.4 MB.
+
+Pitfall / neutralization note: forcing the fallback made `TestBuildSlimApp`
+fail, but on host the fallback copies `os.Executable()`, which under `go test`
+is the test binary (it also embeds `lib.dom.d.ts`, 3x) and cannot serve as an
+app - so the faithful discriminator is the `bytes.Contains` marker check (same
+as `strings | grep`: full og has it, slim has 0), not the serve step. In real
+use the fallback base is a real `og`, which does carry the marker, so a
+regression that reverts to copying the full og trips the assertion.

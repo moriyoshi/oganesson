@@ -17,8 +17,11 @@ tar -xzf og-<version>-<os>-<arch>.tar.gz   # unzip the .zip archive on Windows
 
 Each archive also contains `LICENSE` and `THIRD_PARTY_NOTICES.txt`. You do not
 need Node.js, npm, pnpm, Yarn, a C compiler, or a native-addon toolchain to run
-`og`. A project that contains [native Go modules](native-go-modules.md) does
-need the Go toolchain when Oganesson builds its final executable.
+`og`. The Go toolchain is optional: when it is present, `og build -o` compiles
+a slim serve-only runtime so the final executable is much smaller, and without
+it the build still works by packaging the whole `og`. A project that contains
+[native Go modules](native-go-modules.md) always needs the Go toolchain for its
+final executable.
 
 ### Build from source
 
