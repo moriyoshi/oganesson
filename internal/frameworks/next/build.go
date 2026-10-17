@@ -231,6 +231,10 @@ func Build(ctx context.Context, dir string, opts Options) (*Output, error) {
 	if err != nil {
 		return nil, err
 	}
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, fmt.Errorf("next: resolve project directory: %w", err)
+	}
 	b := &builder{dir: dir, log: opts.Log, minify: !opts.Readable, trees: map[string]*TreeResult{}, clients: map[string]*clientModule{}, actions: map[string]*actionModule{}, licenses: &licenses.Collector{}}
 	if b.nextDir, err = findPackage(dir, "next"); err != nil {
 		return nil, err

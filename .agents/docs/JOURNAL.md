@@ -370,3 +370,24 @@ artifact) and the warm retry generates the client. Not aot-tagged (no PGlite;
 go-mysql-server is a plain dep, like `TestORMDriverMySQL`). The fixture's
 `generated/` and `node_modules/` are gitignored — `og install` materializes the
 adapter + `mariadb`, the build regenerates the client.
+
+## 2026-10-18 - Next CSS preserved through symlinked project roots
+
+- A stock `create-next-app` Tailwind project built from `/tmp/test` on macOS
+  completed successfully but emitted no `static/css` chunks and embedded an
+  empty `entryCSSFiles` manifest. `/tmp` resolves to `/private/tmp`; esbuild
+  canonicalized module paths while the Next loader trees retained the
+  symlinked project path, so the exact-string import graph traversal never
+  reached `app/globals.css`.
+- `next.Build` now resolves the absolute project directory through
+  `filepath.EvalSymlinks` before discovering the app and constructing either
+  graph. This keeps loader-tree, server, and browser module identities aligned
+  for `/tmp`, linked worktrees, and other symlinked project roots.
+- Extended `TestBuildFixture` to build through a symlink. Neutralization
+  confirmed that the unpatched build completed with an empty CSS manifest; the
+  fixed build emits linked CSS entries.
+- End-to-end verification used a patched `og` against the stock Next 16.4.2
+  Tailwind template through a symlink: three CSS chunks were generated and
+  loaded by Chromium, Tailwind layout styles were applied, and the browser had
+  no warnings or errors. As documented, `og install` is required first so the
+  pure-Go build host has Tailwind's WebAssembly substitutes.
