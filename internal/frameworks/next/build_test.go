@@ -59,11 +59,19 @@ func fixtureDir(t *testing.T) string {
 }
 
 func TestBuildFixture(t *testing.T) {
-	out, err := Build(context.Background(), fixtureDir(t), Options{Log: t.Logf})
+	dir := fixtureDir(t)
+	link := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skipf("symlink fixture: %v", err)
+	}
+	out, err := Build(context.Background(), link, Options{Log: t.Logf})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("server bundle: %d bytes, %d routes", len(out.ServerJS), len(out.Routes))
+	if strings.Contains(out.ServerJS, `"entryCSSFiles": {}`) {
+		t.Fatal("build through symlink emitted an empty CSS manifest")
+	}
 }
 
 // serveFixture builds and prerenders the fixture once and serves it exactly
