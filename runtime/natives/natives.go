@@ -50,6 +50,10 @@ var Registry = []Substitute{
 	// promise API) on MySQL in Go (go-sql-driver), its pool shared across
 	// request engines. The mysql2/promise subpath is served by Plugin directly.
 	{Package: "mysql2", Module: "og:mysql2"},
+	// mariadb: a built-in module (js/mariadb.js) on the same Go MySQL service
+	// mysql2 uses (Symbol.for("og.mysql")); @prisma/adapter-mariadb drives it,
+	// so Prisma's MySQL query and migrate paths need no native driver.
+	{Package: "mariadb", Module: "og:mariadb"},
 	// @libsql/client (local file:/:memory: only): a built-in module
 	// (js/libsql-client.js) on the same Go SQLite service better-sqlite3 uses
 	// (Symbol.for("og.sqlite")); drizzle-orm/libsql drives it.
@@ -112,15 +116,18 @@ var mysql2Source string
 //go:embed js/mysql2-promise.js
 var mysql2PromiseSource string
 
+//go:embed js/mariadb.js
+var mariadbSource string
+
 //go:embed js/libsql-client.js
 var libsqlClientSource string
 
 // Plugin serves the built-in substitutes for server builds: imports of the
 // native packages resolve to them.
 func Plugin() api.Plugin {
-	sources := map[string]string{"sharp": sharpSource, "better-sqlite3": sqliteSource, "pg": pgSource, "postgres": postgresSource, "mysql2": mysql2Source, "mysql2/promise": mysql2PromiseSource, "libsql-client": libsqlClientSource}
+	sources := map[string]string{"sharp": sharpSource, "better-sqlite3": sqliteSource, "pg": pgSource, "postgres": postgresSource, "mysql2": mysql2Source, "mysql2/promise": mysql2PromiseSource, "mariadb": mariadbSource, "libsql-client": libsqlClientSource}
 	return api.Plugin{Name: "og-natives", Setup: func(b api.PluginBuild) {
-		b.OnResolve(api.OnResolveOptions{Filter: `^(sharp|better-sqlite3|pg|postgres|mysql2|mysql2/promise|@libsql/client|og:sharp|og:better-sqlite3|og:pg|og:postgres|og:mysql2|og:mysql2/promise|og:libsql-client)$`}, func(a api.OnResolveArgs) (api.OnResolveResult, error) {
+		b.OnResolve(api.OnResolveOptions{Filter: `^(sharp|better-sqlite3|pg|postgres|mysql2|mysql2/promise|mariadb|@libsql/client|og:sharp|og:better-sqlite3|og:pg|og:postgres|og:mysql2|og:mysql2/promise|og:mariadb|og:libsql-client)$`}, func(a api.OnResolveArgs) (api.OnResolveResult, error) {
 			name := a.Path
 			if s, ok := lookup(name); ok {
 				name = s.Module
@@ -163,6 +170,8 @@ func ModuleSource(pkg string) (string, bool) {
 		return mysql2Source, true
 	case "mysql2/promise":
 		return mysql2PromiseSource, true
+	case "mariadb":
+		return mariadbSource, true
 	case "@libsql/client":
 		return libsqlClientSource, true
 	}

@@ -320,7 +320,17 @@ gives each `SQLite` service a unique id, so the DSN is
 
 ## Remaining Prisma follow-ups
 
-- `@prisma/adapter-mariadb` not yet supported.
+- `@prisma/adapter-mariadb` **query** path now works (2026-10-18): the `mariadb`
+  npm driver is substituted by a built-in shim (`runtime/natives/js/mariadb.js`)
+  over the shared Go MySQL service, as `pg` is for adapter-pg, so the real
+  adapter runs unchanged. See the JOURNAL entry of that date. Its **migrate**
+  path is still blocked upstream: adapter-mariadb 7.10.x stubs `executeScript`
+  ("Not implemented yet") and its factory has no `connectToShadowDb`, so
+  `prismaAdapters` has no mysql entry and `migrate deploy`/`db push` report
+  "unsupported datasource provider". Covered end to end by `TestPrismaMySQL`
+  (`internal/frameworks/next`, real adapter client over go-mysql-server, want
+  byte-identical to `TestPrismaPostgres`). Remaining: upstream executeScript (+
+  the shadow-DB story) for migrate.
 - pg/mysql `db push` needs a multi-session shadow DB (schemaPush uses a shadow DB);
   single-session PGlite can't provide one. Only sqlite db push is wired end-to-end.
 - Implicit `prisma generate` for db-push-only builds: real `prisma db push` also

@@ -397,6 +397,8 @@ func decimalString(v any) string {
 		return strconv.FormatInt(int64(x), 10)
 	case int16:
 		return strconv.FormatInt(int64(x), 10)
+	case uint64:
+		return strconv.FormatUint(x, 10)
 	case string:
 		return x
 	case []byte:
@@ -414,6 +416,8 @@ func toFloat(v any) (float64, bool) {
 	case int64:
 		return float64(x), true
 	case uint32:
+		return float64(x), true
+	case uint64:
 		return float64(x), true
 	case float32:
 		return float64(x), true

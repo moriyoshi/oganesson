@@ -2,11 +2,12 @@
   "name": "next-orm",
   "private": true,
   "scripts": {
-    "build": "prisma generate && prisma generate --config prisma-pg.config.ts && next build",
+    "build": "prisma generate && prisma generate --config prisma-pg.config.ts && prisma generate --config prisma-mysql.config.ts && next build",
     "start": "next start"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "7.10.0",
+    "@prisma/adapter-mariadb": "7.10.0",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "better-sqlite3": "13.0.3",
