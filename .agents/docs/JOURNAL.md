@@ -274,3 +274,19 @@ fired 8 times - i.e. the flake occurred mid-build 8 times and was recovered
 every time. Idle regression check: `TestPrisma` and `TestTracedFiles` pass.
 This is a mitigation, not a fix for the build-host engine race, which stays
 tracked above for the engine owner.
+
+## 2026-10-18 - Release target builds parallelized
+
+- Replaced the release workflow's sequential six-target build loop with a
+  six-entry `GOOS`/`GOARCH` matrix. Linux, macOS, and Windows archives for amd64
+  and arm64 can now build concurrently after the shared CI workflow succeeds.
+- Each matrix entry retains the release-version stamp and `go version -m`
+  checks for `GOOS`, `GOARCH`, `CGO_ENABLED=0`, and `-tags=nodynamic`, then
+  uploads a uniquely named artifact. The publish job waits for every matrix
+  entry and merges all `dist-*` artifacts before generating `SHA256SUMS` and
+  creating the release, preserving all-or-nothing publication.
+- The tradeoff is six runner setups and cache restores instead of one shared
+  setup/build cache; the release's wall-clock critical path is reduced at the
+  cost of additional compute.
+- Verification: parsed the workflow and structurally checked the exact six
+  target pairs, unique artifact names, and merged download configuration.
