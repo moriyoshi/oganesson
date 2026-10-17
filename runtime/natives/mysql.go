@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"math/big"
 	"net/url"
 	"strconv"
 	"strings"
@@ -272,7 +273,9 @@ type myBinding struct {
 
 // jsError turns a Go error into a mysql2-shaped JS Error: the server's message,
 // with code/errno/sqlState from a *mysql.MySQLError, so Drizzle/Kysely see the
-// error they expect.
+// error they expect. sqlMessage (the server message without the "Error NNNN"
+// prefix) is also set: mysql2 carries it, and @prisma/adapter-mariadb's
+// isDriverError predicate requires errno + sqlMessage + sqlState together.
 func (b *myBinding) jsError(err error) sobek.Value {
 	o := b.vm.NewGoError(err)
 	var myErr *driver.MySQLError
@@ -280,6 +283,7 @@ func (b *myBinding) jsError(err error) sobek.Value {
 		_ = o.Set("code", mysqlCodeName(myErr.Number))
 		_ = o.Set("errno", int64(myErr.Number))
 		_ = o.Set("sqlState", string(myErr.SQLState[:]))
+		_ = o.Set("sqlMessage", myErr.Message)
 	}
 	return o
 }
@@ -339,6 +343,14 @@ func (b *myBinding) toGo(v sobek.Value) any {
 		return append([]byte(nil), x.Bytes()...)
 	case time.Time:
 		return x
+	case *big.Int:
+		// A JS BigInt bind value (@prisma/adapter-mariadb maps Int64 args to
+		// BigInt). Bind as int64 when it fits, otherwise as its decimal string,
+		// which MySQL accepts for a numeric column without precision loss.
+		if x.IsInt64() {
+			return x.Int64()
+		}
+		return x.String()
 	}
 	return v.String()
 }
@@ -601,7 +613,8 @@ func (b *myBinding) typeCastCell(f myField, v any, opts rowOptions) any {
 	return out
 }
 
-func (b *myBinding) async(work func() (*myResult, error)) sobek.Value {
+// asyncWith runs a query off the loop and settles a JS promise with shape(res).
+func (b *myBinding) asyncWith(shape func(*myResult) sobek.Value, work func() (*myResult, error)) sobek.Value {
 	vm := b.vm
 	promise, resolve, reject := vm.NewPromise()
 	done := b.e.Loop.Async()
@@ -611,10 +624,14 @@ func (b *myBinding) async(work func() (*myResult, error)) sobek.Value {
 			if err != nil {
 				return reject(b.jsError(err))
 			}
-			return resolve(b.shape(res))
+			return resolve(shape(res))
 		})
 	}()
 	return vm.ToValue(promise)
+}
+
+func (b *myBinding) async(work func() (*myResult, error)) sobek.Value {
+	return b.asyncWith(b.shape, work)
 }
 
 func (b *myBinding) queryPool(dsn string, max int64, stmt string, params, rowOpts sobek.Value) sobek.Value {
@@ -785,6 +802,144 @@ func (b *myBinding) registerTLS(caPEM, serverName string) string {
 	return key
 }
 
+// mariaDateTimeString formats a DATETIME/TIMESTAMP as the literal string the
+// mariadb driver returns under dateStrings (go-sql-driver parses these columns
+// in UTC, so the wall-clock is the stored value). Fractional seconds are
+// included only when present; @prisma/adapter-mariadb's mapRow reparses it as
+// a UTC Date, so millisecond precision (Prisma's DATETIME(3) default) survives.
+func mariaDateTimeString(t time.Time) string {
+	if t.Nanosecond() == 0 {
+		return t.Format("2006-01-02 15:04:05")
+	}
+	return t.Format("2006-01-02 15:04:05.999999")
+}
+
+// mariaVal maps a scanned value to the JS value the mariadb driver would
+// deliver to @prisma/adapter-mariadb under its fixed options (rowsAsArray,
+// dateStrings, autoJsonMap:false/jsonStrings, bitOneIsBoolean:false): an Int32
+// column is a number, an Int64 column (BIGINT, unsigned INT) a string the
+// adapter forwards verbatim, DECIMAL a string, a date the MySQL literal string,
+// a binary/BIT/GEOMETRY column a Buffer, and text/JSON/ENUM a string. The
+// dbType is go-sql-driver's DatabaseTypeName, which already encodes signedness
+// ("UNSIGNED INT") and text-vs-binary ("TEXT" vs "BLOB").
+func (b *myBinding) mariaVal(dbType string, v any) any {
+	if v == nil {
+		return nil
+	}
+	up := strings.ToUpper(dbType)
+	unsigned := strings.HasPrefix(up, "UNSIGNED ")
+	switch strings.TrimPrefix(up, "UNSIGNED ") {
+	case "TINYINT", "SMALLINT", "MEDIUMINT", "YEAR":
+		if f, ok := toFloat(v); ok {
+			return f
+		}
+		return decimalString(v)
+	case "INT", "INTEGER":
+		// Unsigned INT is Int64 to the adapter (up to 2^32-1): a string keeps
+		// values above 2^31 exact; signed INT fits a JS number.
+		if unsigned {
+			return decimalString(v)
+		}
+		if f, ok := toFloat(v); ok {
+			return f
+		}
+		return decimalString(v)
+	case "BIGINT":
+		return decimalString(v) // Int64 -> string (exact beyond 2^53)
+	case "FLOAT", "DOUBLE":
+		if f, ok := toFloat(v); ok {
+			return f
+		}
+	case "DECIMAL", "NEWDECIMAL":
+		return decimalString(v)
+	case "DATE":
+		if t, ok := v.(time.Time); ok {
+			return t.Format("2006-01-02")
+		}
+	case "DATETIME", "TIMESTAMP":
+		if t, ok := v.(time.Time); ok {
+			return mariaDateTimeString(t)
+		}
+	case "BIT", "BLOB", "TINYBLOB", "MEDIUMBLOB", "LONGBLOB", "BINARY", "VARBINARY", "GEOMETRY":
+		if bb, ok := v.([]byte); ok {
+			return b.jsBuffer(append([]byte(nil), bb...))
+		}
+	}
+	// TIME, TEXT/VARCHAR/CHAR/ENUM/SET and JSON: strings.
+	switch x := v.(type) {
+	case []byte:
+		return string(x)
+	case string:
+		return x
+	case int64:
+		return float64(x)
+	}
+	return b.vm.ToValue(v)
+}
+
+// shapeMaria builds the host result for the mariadb driver shim (js/mariadb.js):
+// a write carries affectedRows + insertId; a SELECT carries positional rows
+// (mariaVal-converted) and fields exposing name + go-sql-driver dbType + length,
+// from which js/mariadb.js derives the driver's field.type/flags/collation.
+func (b *myBinding) shapeMaria(res *myResult) sobek.Value {
+	vm := b.vm
+	o := vm.NewObject()
+	_ = o.Set("isSelect", res.isSelect)
+	if !res.isSelect {
+		_ = o.Set("affectedRows", res.affected)
+		_ = o.Set("insertId", res.insertId)
+		return o
+	}
+	fields := make([]any, len(res.fields))
+	for i, f := range res.fields {
+		fo := vm.NewObject()
+		_ = fo.Set("name", f.name)
+		_ = fo.Set("dbType", f.dbType)
+		_ = fo.Set("length", f.length)
+		fields[i] = fo
+	}
+	rows := make([]any, len(res.rows))
+	for i, r := range res.rows {
+		vals := make([]any, len(r))
+		for j := range r {
+			dbType := ""
+			if j < len(res.fields) {
+				dbType = res.fields[j].dbType
+			}
+			vals[j] = b.mariaVal(dbType, r[j])
+		}
+		rows[i] = vm.ToValue(vals)
+	}
+	_ = o.Set("fields", vm.ToValue(fields))
+	_ = o.Set("rows", vm.ToValue(rows))
+	return o
+}
+
+// queryPoolMaria runs a one-off mariadb-shim query on the shared pool.
+func (b *myBinding) queryPoolMaria(dsn string, max int64, stmt string, params sobek.Value) sobek.Value {
+	args := b.params(params)
+	return b.asyncWith(b.shapeMaria, func() (*myResult, error) {
+		db, err := b.svc.get(dsn, int(max))
+		if err != nil {
+			return nil, err
+		}
+		return runMySQL(b.ctx, db, stmt, args)
+	})
+}
+
+// queryClientMaria runs a mariadb-shim query on a pinned connection (a
+// transaction spans one).
+func (b *myBinding) queryClientMaria(id int64, stmt string, params sobek.Value) sobek.Value {
+	args := b.params(params)
+	conn := b.conns[id]
+	return b.asyncWith(b.shapeMaria, func() (*myResult, error) {
+		if conn == nil {
+			return nil, errors.New("connection was released before use")
+		}
+		return runMySQL(b.ctx, conn, stmt, args)
+	})
+}
+
 func installMySQL(e *engine.Engine, svc *MySQL) (*sobek.Object, func()) {
 	b := &myBinding{e: e, vm: e.VM, svc: svc, ctx: context.Background(), conns: map[int64]*sql.Conn{}}
 	o := e.VM.NewObject()
@@ -793,5 +948,10 @@ func installMySQL(e *engine.Engine, svc *MySQL) (*sobek.Object, func()) {
 	_ = o.Set("queryClient", b.queryClient)
 	_ = o.Set("release", b.release)
 	_ = o.Set("registerTLS", b.registerTLS)
+	// @prisma/adapter-mariadb's driver shim (js/mariadb.js) shares the acquire/
+	// release/registerTLS surface but needs richer field metadata and
+	// driver-faithful value conversion, so it has its own query entry points.
+	_ = o.Set("queryPoolMaria", b.queryPoolMaria)
+	_ = o.Set("queryClientMaria", b.queryClientMaria)
 	return o, b.cleanup
 }

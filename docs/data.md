@@ -107,7 +107,7 @@ Validated combinations include:
 | Drizzle | `better-sqlite3`, `@libsql/client` local mode, node-postgres, postgres.js, and mysql2; schema/query builders and transactions |
 | Kysely | SQLite, PostgreSQL, and MySQL dialect flows used by the fixtures |
 | TypeORM | `better-sqlite3`, entities with TypeScript decorator metadata, schema operations, relations, and transactions |
-| Prisma 7 | generated client with `@prisma/adapter-better-sqlite3` and `@prisma/adapter-pg`, queries, relations, aggregation, raw queries, and transactions |
+| Prisma 7 | generated client with `@prisma/adapter-better-sqlite3`, `@prisma/adapter-pg`, and `@prisma/adapter-mariadb` (MySQL), queries, relations, aggregation, raw queries, and transactions |
 
 TypeORM glob-based discovery of separately emitted entity or migration files is
 not generally traced. Import entities normally so they enter the server bundle.
@@ -141,8 +141,12 @@ starts, preventing a build-time secret from being embedded in the binary.
 Startup migration runs before the application begins serving requests. A
 migration failure stops startup. PostgreSQL migration requires a real
 multi-session server because Prisma's schema engine uses advisory locking and
-additional connections. MySQL/MariaDB migration adapters and PostgreSQL/MySQL
-`db push` are not yet end-to-end validated.
+additional connections. MySQL/MariaDB migration is not available: the published
+`@prisma/adapter-mariadb` does not implement the schema engine's migration-aware
+interface (its `executeScript` is a stub and it exposes no shadow-database
+connection), so a MySQL datasource reports an unsupported-provider error for
+migrate-deploy and `db push`. The MySQL query path (above) is unaffected.
+PostgreSQL/MySQL `db push` is likewise not yet end-to-end validated.
 
 ## Connection and persistence guidance
 

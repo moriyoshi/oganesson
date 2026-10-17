@@ -1,0 +1,21 @@
+// A third Prisma 7 client, for MySQL over @prisma/adapter-mariadb (og's native
+// mariadb driver shim, runtime/natives/js/mariadb.js). Generated to
+// ../generated/prisma-mysql by a `prisma generate --config prisma-mysql.config.ts`
+// in the build script. Scalar columns only (Int/String/Boolean), as the pg
+// client: the shim returns Int64/DECIMAL as strings and TINYINT(1) as 0/1, which
+// Prisma coerces to the model's field types.
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma-mysql"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Widget {
+  id     Int     @id @default(autoincrement())
+  name   String
+  active Boolean @default(false)
+  qty    Int     @default(0)
+}

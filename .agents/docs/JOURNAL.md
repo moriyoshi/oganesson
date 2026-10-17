@@ -290,3 +290,83 @@ tracked above for the engine owner.
   cost of additional compute.
 - Verification: parsed the workflow and structurally checked the exact six
   target pairs, unique artifact names, and merged download configuration.
+
+## 2026-10-18 — Prisma MySQL query support via a native `mariadb` driver shim
+
+Added the Prisma MySQL *query* path by substituting the `mariadb` npm driver
+with a built-in shim, so the real `@prisma/adapter-mariadb` runs unchanged over
+og's existing Go MySQL service. This mirrors the pg story (the real
+`@prisma/adapter-pg` over the substituted `pg`), per the "use real packages"
+principle.
+
+**What changed:**
+
+- `runtime/natives/js/mariadb.js` (new): the `mariadb` driver surface
+  (`createPool`, pool/connection `query`/`execute`/`getConnection`/`release`/
+  `end`) over `Symbol.for("og.mysql")`. A SELECT is returned as the driver's
+  rowsAsArray result — real JS row arrays carrying a non-enumerable `meta` of
+  column defs, each exposing `name()`, `type`, `flags` (UNSIGNED = 1<<5) and
+  `collation.index` (63 = binary). `mapType` derives all of that from
+  go-sql-driver's `DatabaseTypeName`, which already encodes signedness
+  (`UNSIGNED INT`) and text-vs-binary (`TEXT` vs `BLOB`). Registered in
+  `runtime/natives/natives.go` ({Package:"mariadb", Module:"og:mariadb"} +
+  embed + Plugin filter/sources + ModuleSource).
+- `runtime/natives/mysql.go`: a mariadb value path (`shapeMaria`/`mariaVal`) and
+  host methods (`queryPoolMaria`/`queryClientMaria`, reusing acquire/release/
+  registerTLS). mariaVal produces the driver-faithful values the adapter's
+  fixed options (rowsAsArray, dateStrings, autoJsonMap:false/jsonStrings,
+  bitOneIsBoolean:false) imply: an Int32 column a number, an Int64 column
+  (BIGINT, unsigned INT) a **string** (exact beyond 2^53 — the adapter would
+  otherwise stringify a JS bigint), DECIMAL a string, dates MySQL literal
+  strings, binary/BIT/GEOMETRY a Buffer. `jsError` now also sets `sqlMessage`
+  (mysql2 carries it; the adapter's `isDriverError` requires errno + sqlMessage
+  + sqlState together). `toGo` handles a JS BigInt arg (`*big.Int`). Shared
+  `decimalString`/`toFloat` gained uint64 cases (unsigned BIGINT).
+
+**Pitfalls found:**
+
+- `new URL(...)` throws `TypeError: Value is not an object` inside a bundled
+  built-in module (the sibling shims never parse URLs in JS — they hand the raw
+  connection string to the Go side, which parses it). The shim follows that
+  convention and filters connection-string query params to the go-sql-driver
+  allowlist with plain string ops, dropping `prepareCacheLength` (the adapter
+  appends it) and any Prisma-/mariadb-level params go-sql-driver would reject.
+- The host returns Go-slice-backed values; `Object.defineProperty(rows, "meta")`
+  fails on them and `Array.isArray(row)` is false. `shape` rebuilds genuine JS
+  arrays with `Array.from` before attaching `meta`.
+
+**Tests:** `runtime/natives/mariadb_test.go` (`TestMariaDB`) drives the shim the
+way the adapter does against dolthub/go-mysql-server: DDL, a parameterized
+insert, a rowsAsArray SELECT read through `result.meta`, a committed
+transaction on a pinned connection, and a driver error carrying errno +
+sqlMessage. Neutralized by making BIGINT return a number — the test fails and
+the 2^53+ value visibly loses precision (`...993` → `...992`). Full
+`runtime/natives` suite green; `go build`/`go vet` clean.
+
+**Not done — migrate is blocked upstream.** `@prisma/adapter-mariadb` 7.10.x
+does not implement the migration-aware interface: `executeScript` throws "Not
+implemented yet" and its factory has no `connectToShadowDb` (which
+`bindMigrationAwareSqlAdapterFactory` requires). So `prismaAdapters`
+(`internal/frameworks/next/prismamigrate.go`) was left unchanged — a mysql
+entry would make the boot-time migrator throw rather than give the current
+clear "unsupported datasource provider" error. `migrate deploy`/`db push` for
+MySQL need upstream to implement executeScript (plus the shadow-DB story that
+also blocks pg `db push`). Remaining validation: an end-to-end Prisma MySQL
+query fixture test with the real adapter (mirrors `TestPrismaPostgres`).
+
+**Addendum — end-to-end query test landed.** `TestPrismaMySQL`
+(`internal/frameworks/next/orm_prisma_mysql_test.go`) drives the real
+`@prisma/adapter-mariadb` 7.10.0 generated client against go-mysql-server: a new
+`prisma/schema-mysql.prisma` + `prisma-mysql.config.ts` + a third `prisma
+generate --config prisma-mysql.config.ts` in next-orm's build script, an
+`app/api/prisma-mysql` route, and `@prisma/adapter-mariadb` added to the
+fixture's package.json. The expectation is byte-identical to
+`TestPrismaPostgres` (same Widget model/operations) — Prisma is DB-agnostic, so
+the shim must reproduce it: BIGINT `count` coerced to the number 2, TINYINT(1)
+`active` to booleans, `_sum` of qty to 10, and an interactive `$transaction`
+rolled back. Green. The build logs "Failed to parse syntax of config file …
+prisma-mysql.config.ts" once on the cold build (the known brand-new-.ts-config
+artifact) and the warm retry generates the client. Not aot-tagged (no PGlite;
+go-mysql-server is a plain dep, like `TestORMDriverMySQL`). The fixture's
+`generated/` and `node_modules/` are gitignored — `og install` materializes the
+adapter + `mariadb`, the build regenerates the client.
