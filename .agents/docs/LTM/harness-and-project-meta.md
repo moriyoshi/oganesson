@@ -24,9 +24,9 @@ released rather than what the runtime does.
 - CI (`.github/workflows/ci.yml`) runs lint and tests only, all on
   `ubuntu-latest`. It builds nothing; release is the only place binaries are
   built.
-- Tagged releases build the six supported OS/architecture binaries
-  sequentially in one job, verify each binary's embedded Go build metadata,
-  and publish all archives atomically with `SHA256SUMS`.
+- Tagged releases build the six supported OS/architecture binaries in parallel
+  matrix jobs, verify each binary's embedded Go build metadata, and publish all
+  archives atomically with `SHA256SUMS`.
 - Notices system: `scripts/collect-notices.sh` generates a deterministic
   `runtime/notices/THIRD_PARTY_NOTICES.txt` (~260 KB, checked in). `og licenses`
   and `<app> -licenses` print it; ejected modules get `-licenses` too.
@@ -104,15 +104,16 @@ Supporting pieces:
   `third_party/typescript` from cache and always re-runs
   `scripts/sync-typescript.sh` (reinstalls `_tsoverlay/ogapi`).
 - `.github/workflows/release.yml` (`v*` tags): `needs: ci` (waits for `lint` and
-  `test`), then one job builds Linux, macOS, and Windows for amd64 and arm64
-  sequentially. Sharing checkout, TypeScript-Go sync, module downloads, and the
-  Go build cache avoids six independent matrix jobs. Each binary is checked
-  with `go version -m` for the requested `GOOS`, `GOARCH`, `CGO_ENABLED=0`, and
-  `-tags=nodynamic` before packaging. One complete `dist` artifact feeds the
-  publishing job, which adds `SHA256SUMS`; tags containing `-` are prereleases.
+  `test`), then a six-entry matrix builds Linux, macOS, and Windows for amd64
+  and arm64 in parallel. Each entry uploads a uniquely named target artifact.
+  The publishing job waits for the whole matrix, merges those artifacts, and
+  adds `SHA256SUMS`, so releases remain atomic. Each binary is checked with `go
+  version -m` for the requested `GOOS`, `GOARCH`, `CGO_ENABLED=0`, and
+  `-tags=nodynamic` before packaging; tags containing `-` are prereleases.
   Linux/macOS archives are `.tar.gz`, Windows archives are `.zip`, and each
   contains the executable, `LICENSE`, `README.md`, and
-  `THIRD_PARTY_NOTICES.txt`.
+  `THIRD_PARTY_NOTICES.txt`. Parallelism repeats runner setup and cache restore
+  work, trading some compute consumption for lower release latency.
 - `scripts/install-fixtures.sh`: builds og once and runs `og install` over
   fixture directories or patterns.
 

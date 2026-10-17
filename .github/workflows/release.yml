@@ -18,11 +18,29 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  # Waits for every job in ci.yml (lint and test).
+  # Waits for every job in ci.yml (lint and test), then builds the independent
+  # target archives in parallel. Each matrix entry uses a distinct artifact;
+  # publish downloads and merges them only after the whole matrix succeeds.
   build:
-    name: Build release archives
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }} release archive
     needs: ci
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -33,52 +51,44 @@ jobs:
       # Everything is written under $RUNNER_TEMP: an untracked file in the
       # checkout would stamp the binary as vcs.modified ("-dirty"), and
       # `og build -target` only accepts runtimes from the same clean source.
-      # One job intentionally builds every target so checkout, Go setup,
-      # TypeScript-Go synchronization, module downloads and Go's build cache
-      # are shared across the six builds.
       - name: Build and package
+        env:
+          TARGET_GOOS: ${{ matrix.goos }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p "$RUNNER_TEMP/dist"
-          for target in \
-            linux/amd64 linux/arm64 \
-            darwin/amd64 darwin/arm64 \
-            windows/amd64 windows/arm64
-          do
-            goos=${target%/*}
-            goarch=${target#*/}
-            exe=og; [ "$goos" = windows ] && exe=og.exe
-            name="og-${GITHUB_REF_NAME}-${goos}-${goarch}"
-            stage="$RUNNER_TEMP/$name"
-            mkdir -p "$stage"
+          target="$TARGET_GOOS/$TARGET_GOARCH"
+          exe=og; [ "$TARGET_GOOS" = windows ] && exe=og.exe
+          name="og-${GITHUB_REF_NAME}-${TARGET_GOOS}-${TARGET_GOARCH}"
+          stage="$RUNNER_TEMP/$name"
+          mkdir -p "$stage"
 
-            # The tag is og's module version: og build -eject pins it.
-            OG_VERSION="$GITHUB_REF_NAME" scripts/build-og.sh "$stage/$exe" "$target"
+          # The tag is og's module version: og build -eject pins it.
+          OG_VERSION="$GITHUB_REF_NAME" scripts/build-og.sh "$stage/$exe" "$target"
 
-            # Check the binary itself before archiving it. This catches a
-            # target-label regression or accidentally dropped release flags.
-            metadata=$(go version -m "$stage/$exe")
-            printf '%s\n' "$metadata"
-            for setting in "GOOS=$goos" "GOARCH=$goarch" "CGO_ENABLED=0" '-tags=nodynamic'; do
-              printf '%s\n' "$metadata" | grep -Fq -- "$setting" || {
-                echo "::error::built binary is missing build setting $setting"
-                exit 1
-              }
-            done
-
-            cp LICENSE README.md runtime/notices/THIRD_PARTY_NOTICES.txt "$stage/"
-
-            cd "$RUNNER_TEMP"
-            if [ "$goos" = windows ]; then
-              zip -qr "dist/$name.zip" "$name"
-            else
-              tar -czf "dist/$name.tar.gz" "$name"
-            fi
-            cd "$GITHUB_WORKSPACE"
+          # Check the binary itself before archiving it. This catches a
+          # target-label regression or accidentally dropped release flags.
+          metadata=$(go version -m "$stage/$exe")
+          printf '%s\n' "$metadata"
+          for setting in "GOOS=$TARGET_GOOS" "GOARCH=$TARGET_GOARCH" "CGO_ENABLED=0" '-tags=nodynamic'; do
+            printf '%s\n' "$metadata" | grep -Fq -- "$setting" || {
+              echo "::error::built binary is missing build setting $setting"
+              exit 1
+            }
           done
+
+          cp LICENSE README.md runtime/notices/THIRD_PARTY_NOTICES.txt "$stage/"
+
+          cd "$RUNNER_TEMP"
+          if [ "$TARGET_GOOS" = windows ]; then
+            zip -qr "dist/$name.zip" "$name"
+          else
+            tar -czf "dist/$name.tar.gz" "$name"
+          fi
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
 
@@ -91,8 +101,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dist
+          pattern: dist-*
           path: dist
+          merge-multiple: true
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS
