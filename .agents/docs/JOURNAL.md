@@ -391,3 +391,13 @@ adapter + `mariadb`, the build regenerates the client.
   loaded by Chromium, Tailwind layout styles were applied, and the browser had
   no warnings or errors. As documented, `og install` is required first so the
   pure-Go build host has Tailwind's WebAssembly substitutes.
+
+## 2026-10-18 - README Bill of Thanks recovered
+
+- Restored the complete `Bill of Thanks` section immediately before `License`
+  in `README.md`. The text was recovered from reflog commit `5532d27` (and is
+  byte-identical in the earlier `18b1de3` and `1f52b60` snapshots).
+- Kept the current condensed README and its newer license wording intact; only
+  the missing acknowledgements section was reintroduced.
+- Verification compared the restored section with `5532d27:README.md` and
+  checked the documentation tree for decomposed Japanese characters.
