@@ -241,12 +241,17 @@ thing-wasm32-wasi@1.0.0:
   languageName: unknown
   linkType: soft
 `
+	// Newer pnpm splits the lockfile across multiple YAML documents: metadata
+	// first, then importers/packages/snapshots. A single Unmarshal reads only
+	// the first, which would make every root dependency look absent.
+	pnpmMultiDoc := "lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: true\n---\n" + pnpm
 	for name, files := range map[string]map[string]string{
-		"package-lock.json": {"package-lock.json": npm},
-		"bun.lock":          {"bun.lock": bun},
-		"pnpm-lock.yaml":    {"pnpm-lock.yaml": pnpm},
-		"yarn.lock v1":      {"yarn.lock": yarn1},
-		"yarn.lock berry":   {"yarn.lock": berry},
+		"package-lock.json":        {"package-lock.json": npm},
+		"bun.lock":                 {"bun.lock": bun},
+		"pnpm-lock.yaml":           {"pnpm-lock.yaml": pnpm},
+		"pnpm-lock.yaml multi-doc": {"pnpm-lock.yaml": pnpmMultiDoc},
+		"yarn.lock v1":             {"yarn.lock": yarn1},
+		"yarn.lock berry":          {"yarn.lock": berry},
 	} {
 		for _, dev := range []bool{true, false} {
 			t.Run(name+map[bool]string{true: " dev", false: " prod"}[dev], func(t *testing.T) {
