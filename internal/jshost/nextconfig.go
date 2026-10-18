@@ -82,7 +82,14 @@ globalThis.__ogNextSetup = (async () => {
 	for k, v := range saved {
 		h.Alias[k] = v
 	}
+	// next.config may import modules that await at their top level (nextra's
+	// withNextra reaches nextra/dist/{client/pages,server/loader}.js, both
+	// top-level await). Enable the ESM top-level-await fallback so Bundle
+	// lowers them instead of failing the Goja target ("esnext" + overrides).
+	savedTLA := h.TopLevelAwait
+	h.TopLevelAwait = true
 	code, err := h.Bundle("", entry, "")
+	h.TopLevelAwait = savedTLA
 	h.Alias = saved
 	if err != nil {
 		return nil, err

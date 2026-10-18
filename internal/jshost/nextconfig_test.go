@@ -82,6 +82,27 @@ func TestLoadNextFunctionConfig(t *testing.T) {
 	}
 }
 
+// TestLoadNextTopLevelAwait guards the config-load path against modules that
+// await at their top level, as nextra's withNextra does (it reaches
+// nextra/dist/{client/pages,server/loader}.js, both top-level await). The Goja
+// target lists top-level-await among its unsupported features, so without the
+// ESM fallback esbuild fails with `Top-level await is not available in the
+// configured target environment ("esnext" + N overrides)`.
+func TestLoadNextTopLevelAwait(t *testing.T) {
+	dir := project(t, map[string]string{
+		"tla.mjs": `export const basePath = await Promise.resolve("/tla");`,
+		"next.config.mjs": `import { basePath } from "./tla.mjs";
+export default { basePath };`,
+	})
+	s, err := (&Host{Dir: dir, Out: io.Discard}).LoadNext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Config["basePath"] != "/tla" {
+		t.Errorf("basePath = %v, want /tla (top-level await value lost)", s.Config["basePath"])
+	}
+}
+
 func TestMiddlewareMatchers(t *testing.T) {
 	dir := project(t, map[string]string{
 		"proxy.ts": `import { NextResponse } from "next/server";
