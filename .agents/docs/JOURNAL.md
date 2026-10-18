@@ -583,3 +583,13 @@ Fix: give the runtime require path a real async `import()`.
 - Files: `internal/jshost/jshost.go` (`rewriteDynamicImports`, `asyncImport`), `internal/jshost/require.go` (`moduleSource` rewrite, `moduleHasTLA`, `resolveDyn`/`runTLA`, `requireFront`'s `og.import`), `internal/jshost/asyncimport_test.go`.
 - Test: `TestAsyncDynamicImportTLA` — a runtime-required `.cjs` that awaits a literal and a computed `import()`, one target awaiting at its top level. Neutralized (forcing `moduleHasTLA`'s result to `false`) it fails with the exact reported `"esnext" + 9 overrides` diagnostic — a behavioral failure, not a compile error. `TestModuleHasTLA` pins the detection (top-level await yes; `await` inside an async function no; CommonJS no).
 - Pitfall / known gap: this unblocks nextra's top-level await, but a full nextra build then fails on `@napi-rs/simple-git` (nextra's git-timestamp feature), a native addon og cannot `dlopen` and which ships no WebAssembly fallback. nextra guards it with `if (process.versions.webcontainer) return;`. Handling native-optional dynamic imports is a separate decision, left open.
+
+## `og version` subcommand — 2026-10-18
+
+Added `og version`, which prints the Oganesson version the CLI corresponds to, as `og <version> <goos>/<goarch> <goversion>` (e.g. `og v0.3.0 darwin/arm64 go1.27.0`).
+
+- Version resolution reuses the existing precedence (`ogVersion()`): the release version injected at build time (`-X main.version`, set by `scripts/build-og.sh` from `OG_VERSION`), else the Go-stamped module version from `debug.ReadBuildInfo` (a pseudo-version, or `(devel)` for an unstamped local build), else `"unknown"`. This mirrors `ogModuleVersion` in `eject.go` but is not gated on `semver` canonicality, so dev builds still report their pseudo-version rather than falling back.
+- Registered in the `commands` table in `cmd/og/main.go`, so it also appears in `og` usage.
+- Files: `cmd/og/version.go` (`ogVersion`, `runVersion`, `writeVersion`), `cmd/og/main.go` (command entry), `cmd/og/version_test.go`.
+- Tests: `TestOgVersionPrefersInjected` (injected version wins), `TestOgVersionFallsBack` (non-empty with no injection), `TestWriteVersion` (output contains the version, `goos/goarch`, Go version, and is newline-terminated). Neutralized by dropping the trailing `\n` from the format string: `TestWriteVersion` fails with "not newline-terminated" — a behavioral failure, not a compile error.
+- Docs: added to the CLI command listing and the `cmd/og` row in ARCHITECTURE.md.
