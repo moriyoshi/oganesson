@@ -1,6 +1,7 @@
 package jshost
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -81,6 +82,103 @@ func TestLightningcssMissing(t *testing.T) {
 	defer ph.Close()
 	if _, err := ph.Lightningcss(filepath.Join(root, "a.css"), ".a{}"); err == nil || !strings.Contains(err.Error(), "add lightningcss-wasm to devDependencies") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// lightningcssLoader is the shape of lightningcss/node/index.js that
+// nativeSubstitute rewrites: the lightningcss-<platform> package require
+// (line 18 of the real file) and its catch-branch .node fallback, both
+// inside one try/catch. The platform branch is trimmed to avoid a
+// detect-libc require; the two literal requires are verbatim.
+const lightningcssLoader = "let parts = [process.platform, process.arch];\n" +
+	"if (process.platform === 'linux') { parts.push('gnu'); }\n" +
+	"let native;\n" +
+	"try {\n" +
+	"  native = require(`lightningcss-${parts.join('-')}`);\n" +
+	"} catch (err) {\n" +
+	"  native = require(`../lightningcss.${parts.join('-')}.node`);\n" +
+	"}\n" +
+	"module.exports = native;\n"
+
+func writeLightningcssLoader(t *testing.T, dir string) {
+	t.Helper()
+	node := filepath.Join(dir, "node_modules", "lightningcss", "node")
+	if err := os.MkdirAll(node, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range map[string]string{
+		"package.json":  `{"name":"lightningcss","version":"1.32.0","main":"node/index.js"}`,
+		"node/index.js": lightningcssLoader,
+	} {
+		p := filepath.Join(dir, "node_modules", "lightningcss", filepath.FromSlash(name))
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestLightningcssNativeSubstitute: at build time lightningcss's loader is
+// rewritten to its lightningcss-wasm build. The whole try/catch is
+// rewritten, not just the package require: when lightningcss-wasm is
+// present, the module is it (the .node fallback never runs); when it is
+// missing (a node_modules populated by npm/pnpm/yarn, not og install), the
+// catch branch throws an actionable error naming lightningcss-wasm and
+// og install, NOT the opaque ERR_DLOPEN_FAILED of the native .node.
+func TestLightningcssNativeSubstitute(t *testing.T) {
+	// With lightningcss-wasm: require("lightningcss") is its exports.
+	withWasm := t.TempDir()
+	writeLightningcssLoader(t, withWasm)
+	wasm := filepath.Join(withWasm, "node_modules", "lightningcss-wasm")
+	if err := os.MkdirAll(wasm, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range map[string]string{
+		"package.json": `{"name":"lightningcss-wasm","version":"1.32.0","main":"index.js"}`,
+		"index.js":     `module.exports = { __fromWasm: true };`,
+	} {
+		if err := os.WriteFile(filepath.Join(wasm, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := &Host{Dir: withWasm, Out: io.Discard}
+	code, err := h.Bundle("", `
+const req = eval("require");
+globalThis.result = String(req("lightningcss").__fromWasm === true);
+`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := h.Eval(context.Background(), code, "result"); err != nil || v != "true" {
+		t.Fatalf("with lightningcss-wasm: got %v, err %v", v, err)
+	}
+
+	// Without lightningcss-wasm: an actionable error, and never the .node's
+	// ERR_DLOPEN_FAILED. The caught lightningcss-wasm miss is kept as cause.
+	noWasm := t.TempDir()
+	writeLightningcssLoader(t, noWasm)
+	h = &Host{Dir: noWasm, Out: io.Discard}
+	code, err = h.Bundle("", `
+const req = eval("require");
+let out;
+try { req("lightningcss"); out = "no throw"; }
+catch (e) { out = [e.message, String(e.code), e.cause ? "has-cause" : "no-cause"].join("|"); }
+globalThis.result = out;
+`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := h.Eval(context.Background(), code, "result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := v.(string)
+	if strings.Contains(s, "ERR_DLOPEN_FAILED") {
+		t.Errorf("surfaced the opaque native-addon error: %q", s)
+	}
+	for _, want := range []string{"lightningcss-wasm", "og install", "has-cause"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("error lacks %q: %q", want, s)
+		}
 	}
 }
 

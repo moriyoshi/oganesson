@@ -493,3 +493,59 @@ app - so the faithful discriminator is the `bytes.Contains` marker check (same
 as `strings | grep`: full og has it, slim has 0), not the serve step. In real
 use the fallback base is a real `og`, which does carry the marker, so a
 regression that reverts to copying the full og trips the assertion.
+
+## 2026-10-18 - lightningcss `.node` fallback: actionable error when lightningcss-wasm is missing
+
+A user on amd64 macOS hit, at build time:
+
+```
+app/layout.tsx: Error: og cannot load the native addon ../lightningcss.linux-x64-gnu.node (no dlopen in a pure Go runtime)
+```
+
+**Diagnosis.** The `linux-x64-gnu` in the path is expected: og presents itself as
+Node on Linux/glibc at build time (`runtime/nodeshim/js/globals.js`), so
+lightningcss computes that platform regardless of host. The real cause was a
+missing `lightningcss-wasm`. lightningcss's loader (`lightningcss/node/index.js`)
+is one try/catch:
+
+```js
+try   { native = require(`lightningcss-${parts.join('-')}`); }   // line 18
+catch (err) { native = require(`../lightningcss.${parts.join('-')}.node`); }  // line 20
+```
+
+`nativeSubstitute` (`internal/jshost/native.go`) rewrote only line 18 to
+`require("lightningcss-wasm")`. When `lightningcss-wasm` is absent - a
+`node_modules` populated by npm/pnpm/yarn rather than `og install`, which is the
+only thing that injects the synthetic `lightningcss-wasm` (`runtime/natives`
+Registry -> `install.InstallFor`) - the rewritten require throws, lightningcss's
+own catch runs line 20, and the `.node` reaches `require.go`'s opaque
+`ERR_DLOPEN_FAILED`. lightningcss is pulled in by Tailwind v4's
+`@tailwindcss/postcss` even on the default (non-`useLightningcss`) CSS path.
+
+**Fix.** Rewrite the whole try/catch, not just line 18. The catch's `.node`
+fallback (`lightningcssNativeFallback`) now becomes `lightningcssWasmMissing`:
+an IIFE that throws a clear "add lightningcss-wasm / run og install" error,
+keeping the caught `err` (the lightningcss-wasm miss) as `.cause`. The native
+`.node` can no longer be reached. Mirrors the message `bridge.js` already gives
+on the `useLightningcss` path.
+
+**Files.** `internal/jshost/native.go` (the lightningcss branch of
+`nativeSubstitute`; new `lightningcssNativeFallback` / `lightningcssWasmMissing`
+constants). Test: `internal/jshost/lightningcss_test.go`
+(`TestLightningcssNativeSubstitute`).
+
+**Test.** A faithful loader fixture (the two literal requires inside one
+try/catch, platform branch trimmed to avoid a detect-libc require) required
+through the host. With `lightningcss-wasm` present the module is its exports
+(the `.node` branch never runs); without it, the thrown error contains
+`lightningcss-wasm` and `og install`, has a cause, and is NOT
+`ERR_DLOPEN_FAILED`. Neutralized by removing the fallback rewrite: the test then
+fails with the exact `ERR_DLOPEN_FAILED` from the user's report (a behavioral
+failure, not a compile error).
+
+**Pitfall.** The catch IIFE references `err`, the catch binding; guarded with
+`typeof err !== "undefined"` so a future lightningcss whose catch names its
+variable differently degrades to a cause-less throw rather than a ReferenceError.
+The substitution still gates on the line-18 literal being present, so a loader
+that drops the `lightningcss-${parts.join('-')}` package form entirely is not
+rewritten (acceptable: no `.node` fallback to reach in that shape either).

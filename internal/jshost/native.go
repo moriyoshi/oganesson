@@ -57,12 +57,21 @@ func nativeSubstitute(path string) (string, bool) {
 			return fmt.Sprintf("module.exports = require(%q).load(%s);", napiRSWasiModule, jsonString(wasm)), true
 		}
 	}
-	// lightningcss loads lightningcss-<platform> (a .node binary); its
+	// lightningcss loads lightningcss-<platform> (a .node binary), and on
+	// failure falls back to the prebuilt ../lightningcss.<platform>.node; its
 	// WebAssembly build is the separately published lightningcss-wasm
 	// (installed alongside, see internal/install), with the same exports.
+	// Both requires are inside one try/catch: the first (the package) is
+	// rewritten to lightningcss-wasm, and the catch's .node fallback to a
+	// clear error. Were only the first rewritten, a project whose node_modules
+	// lacks lightningcss-wasm (populated by npm/pnpm/yarn rather than og
+	// install) would have the rewritten require throw, the catch run, and the
+	// .node reach require.go's opaque ERR_DLOPEN_FAILED instead.
 	if strings.HasSuffix(path, "/lightningcss/node/index.js") {
 		if src, err := os.ReadFile(path); err == nil && strings.Contains(string(src), lightningcssNative) {
-			return strings.Replace(string(src), lightningcssNative, `require("lightningcss-wasm")`, 1), true
+			out := strings.Replace(string(src), lightningcssNative, `require("lightningcss-wasm")`, 1)
+			out = strings.Replace(out, lightningcssNativeFallback, lightningcssWasmMissing, 1)
+			return out, true
 		}
 	}
 	// Rollup 4 loads @rollup/rollup-<platform> (a .node binary) from
@@ -202,6 +211,14 @@ if (!nativeBinding) {
   if (loadErrors.length > 0) {`
 
 const lightningcssNative = "require(`lightningcss-${parts.join('-')}`)"
+
+// lightningcssNativeFallback is the catch branch of lightningcss's loader
+// (require(`lightningcss-${parts.join('-')}`) failing), which dlopens the
+// prebuilt binary; og cannot, so it becomes lightningcssWasmMissing. The
+// catch binds `err` (the lightningcss-wasm load failure), kept as the cause.
+const lightningcssNativeFallback = "require(`../lightningcss.${parts.join('-')}.node`)"
+
+const lightningcssWasmMissing = `(() => { const e = new Error("og: lightningcss needs its WebAssembly build (lightningcss-wasm), which is missing from node_modules; run 'og install' in the project to add it (og injects lightningcss-wasm automatically when lightningcss is a dependency)"); e.cause = typeof err !== "undefined" ? err : undefined; throw e; })()`
 
 // embeddedLoader bundles one of embeddedModules on first require.
 func (h *Host) embeddedLoader(name string) require.ModuleLoader {
