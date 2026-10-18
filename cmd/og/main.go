@@ -28,6 +28,7 @@ var commands = []command{
 	{"serve", "serve [-addr :3000] [dir]  serve a built app", runServe},
 	{"compat", "compat [-run re] [-failed report.json] [-j n] [-pages n] [-json file] dir...\n                  install, build, serve and crawl apps (the compatibility corpus)", runCompat},
 	{"licenses", "licenses        print the licenses of og and the software it includes", runLicenses},
+	{"version", "version         print the Oganesson version this CLI corresponds to", runVersion},
 }
 
 func signalContext() (context.Context, context.CancelFunc) {

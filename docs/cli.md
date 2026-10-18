@@ -95,6 +95,22 @@ my-app -licenses
 That output adds the npm-package notices collected from the application's
 shipped bundles and assets.
 
+## `og version`
+
+```text
+og version
+```
+
+Prints the Oganesson version this `og` corresponds to, along with the host
+platform and the Go version it was built with, for example:
+
+```text
+og v0.3.0 darwin/arm64 go1.27.0
+```
+
+A build that was not stamped with a release version (a local build) reports the
+Go module version instead, such as a pseudo-version or `(devel)`.
+
 ## `og compat`
 
 ```text

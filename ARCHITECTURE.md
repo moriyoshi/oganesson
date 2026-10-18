@@ -18,7 +18,7 @@ Sobek lacks async generators, ESM (as og uses it), the RegExp `v` and `d` flags,
 
 | Path | Contents |
 |------|----------|
-| `cmd/og` | CLI: `install`, `check`, `build`, `serve`, `compat` (the compatibility corpus runner: install, build, serve and crawl apps, each a child `og` process). A Oganesson executable with an appended payload acts as that app's server. |
+| `cmd/og` | CLI: `install`, `check`, `build`, `serve`, `compat` (the compatibility corpus runner: install, build, serve and crawl apps, each a child `og` process), `licenses`, `version`. A Oganesson executable with an appended payload acts as that app's server. |
 | `internal/install` | npm-free package installer (registry tarballs, integrity checks, no lifecycle scripts). |
 | `internal/jshost` | Build-time Sobek host: next.config loading, middleware matchers, the esbuild JS plugin bridge, the webpack loader shim, `require` (a computed `require(x)` / `import(x)` in a bundled module resolves a relative `x` from that module's file; a `.node` addon throws Node's `ERR_DLOPEN_FAILED`; sharp and better-sqlite3 are og's Go-backed substitutes, as in packaged apps), and `worker_threads` workers (each its own engine and goroutine; a worker ends when its loop is idle, its `parentPort` holding it while it has message listeners; build-time writes, temp files included via a project-local TMPDIR, stay inside the project). |
 | `internal/frameworks/next` | The Next.js compiler: app tree scan, layers, RSC transforms, server actions, the browser build, CSS, manifests, the entry dispatcher. next.config's `webpack()` hook runs against a stand-in webpack config; the loaders, aliases, fallbacks and definitions it adds are applied (`webpackhook.go`). |
@@ -202,6 +202,7 @@ og check [dir]                # type-check with TypeScript-Go
 og build [-o app] [dir]       # build into .og/ (and a single binary with -o)
 og serve [-addr :3000] [dir]  # serve a built .og/
 og licenses                   # licenses of og and everything it includes
+og version                    # the Oganesson version this CLI corresponds to
 ./app [-addr :3000]             # a packaged app binary (PORT is honored; -licenses)
 ```
 
