@@ -273,6 +273,10 @@ func moduleSource(path string, patch func(path, src string) (string, error)) (st
 		src = "//" + src[2:]
 	}
 	src = replaceImportMeta(path, src, path)
+	// import() becomes og.import(specifier, dir) so a top-level-await module
+	// can be loaded asynchronously; esbuild would lower it to a synchronous
+	// require() that cannot await the target's evaluation (jshost.go).
+	src = rewriteDynamicImports(path, src)
 	opts := gojatarget.TransformOptions(loaderFor(path), path)
 	opts.Format = api.FormatCommonJS
 	// esbuild renames a function expression that shares its variable's
@@ -295,6 +299,42 @@ func moduleSource(path string, patch func(path, src string) (string, error)) (st
 		code = withESMRequire(code)
 	}
 	return code, nil
+}
+
+// tlaNotAvailable is the fragment of esbuild's error for a top-level await in
+// a target that does not support it ("…("esnext" + N overrides)"). og.import
+// detects such a module (moduleHasTLA) to load it through the async path.
+const tlaNotAvailable = "Top-level await is not available"
+
+// moduleHasTLA reports whether the module at path awaits at its top level, by
+// asking esbuild to lower it to the Goja target (where top-level await is
+// unsupported) and checking for its diagnostic. Only ES modules can; others
+// (CommonJS, JSON) short-circuit.
+func moduleHasTLA(path string, patch func(path, src string) (string, error)) bool {
+	if strings.HasSuffix(path, ".json") {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	src := string(b)
+	if patch != nil {
+		if s, err := patch(path, src); err == nil {
+			src = s
+		}
+	}
+	if strings.HasPrefix(src, "#!") {
+		src = "//" + src[2:]
+	}
+	opts := gojatarget.TransformOptions(loaderFor(path), path)
+	opts.Format = api.FormatCommonJS
+	for _, e := range api.Transform(src, opts).Errors {
+		if strings.Contains(e.Text, tlaNotAvailable) {
+			return true
+		}
+	}
+	return false
 }
 
 // withModuleFields gives the module object what Node's has and the
@@ -651,12 +691,73 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 		_ = e.Set("code", "MODULE_NOT_FOUND")
 		panic(e)
 	}
+	// og.resolveDyn(specifier, dir): resolve a dynamic import's target to a
+	// path (or node:<builtin>) and report whether it awaits at its top level,
+	// so og.import (requireFront) can load a top-level-await module through
+	// the async path and anything else through the synchronous require.
+	tlaOf := map[string]bool{}
+	resolveDyn := func(call sobek.FunctionCall) sobek.Value {
+		id := call.Argument(0).String()
+		if strings.HasPrefix(id, "file://") {
+			if u, err := url.Parse(id); err == nil {
+				id = u.Path
+			}
+		}
+		o := vm.NewObject()
+		// A module the bundle itself contains, or a bare/builtin specifier that
+		// resolveModule leaves unresolved, requires synchronously as before.
+		if shared(id) != nil || strings.HasSuffix(id, ".node") {
+			_ = o.Set("path", id)
+			_ = o.Set("tla", false)
+			return o
+		}
+		target := id
+		if r, err := resolveModule(id, call.Argument(1).String()); err == nil {
+			target = r
+		}
+		tla := false
+		if filepath.IsAbs(target) {
+			var ok bool
+			if tla, ok = tlaOf[target]; !ok {
+				tla = moduleHasTLA(target, h.Patch)
+				tlaOf[target] = tla
+			}
+		}
+		_ = o.Set("path", target)
+		_ = o.Set("tla", tla)
+		return o
+	}
+	// og.runTLA(path): bundle a top-level-await module (Bundle's ESM fallback
+	// wraps its evaluation in a promise under Symbol.for("og.bundleDone") and
+	// records the namespace under Symbol.for("og.dynModules")), evaluate it on
+	// this VM, and return the promise of its evaluation. requireFront's
+	// og.import reads the namespace once the promise settles.
+	runTLA := func(call sobek.FunctionCall) sobek.Value {
+		path := call.Argument(0).String()
+		stdin := fmt.Sprintf("import * as __ogDynNS from %[1]s;\n(globalThis[Symbol.for(%[2]q)] ??= Object.create(null))[%[1]s] = __ogDynNS;\n",
+			jsonString(path), "og.dynModules")
+		savedTLA := h.TopLevelAwait
+		h.TopLevelAwait = true
+		code, err := h.Bundle("", stdin, "")
+		h.TopLevelAwait = savedTLA
+		if err != nil {
+			panic(jsError(vm, "Error", err.Error()))
+		}
+		if _, err := vm.RunString(code); err != nil {
+			panic(err)
+		}
+		done, err := vm.RunString(`globalThis[Symbol.for("og.bundleDone")]`)
+		if err != nil {
+			panic(err)
+		}
+		return done
+	}
 	fn, err := vm.RunString(requireFront)
 	if err != nil {
 		return err
 	}
 	install, _ := sobek.AssertFunction(fn)
-	_, err = install(sobek.Undefined(), cjsRequire, vm.ToValue(resolve), vm.ToValue(h.Dir), vm.ToValue(callerResolve))
+	_, err = install(sobek.Undefined(), cjsRequire, vm.ToValue(resolve), vm.ToValue(h.Dir), vm.ToValue(callerResolve), vm.ToValue(resolveDyn), vm.ToValue(runTLA))
 	return err
 }
 
@@ -716,8 +817,39 @@ func (h *Host) builtinLoader(name string) require.ModuleLoader {
 
 // requireFront makes createRequire(from) resolve ids from `from` to an
 // absolute path (or node:<builtin>) before delegating to goja_nodejs.
-const requireFront = `(function (cjsRequire, resolve, root, callerResolve) {
+const requireFront = `(function (cjsRequire, resolve, root, callerResolve, resolveDyn, runTLA) {
   const dirname = (p) => p.slice(0, p.lastIndexOf("/")) || "/";
+  // og.import(specifier, dir) is what moduleSource rewrites import() to. It
+  // mirrors esbuild's import()->require() lowering for an ordinary module (a
+  // promise of __toESM(require(...))), but loads a top-level-await module
+  // asynchronously (runTLA) instead of requiring it synchronously.
+  const toNamespace = (m) => {
+    if (m && m.__esModule) return m;
+    const ns = Object.create(null);
+    if (m != null && (typeof m === "object" || typeof m === "function")) {
+      for (const k of Object.keys(m)) if (k !== "default") ns[k] = m[k];
+    }
+    ns.default = m;
+    return ns;
+  };
+  const DYN = Symbol.for("og.dynModules");
+  const inflight = new Map();
+  const loadTLA = (path) => {
+    const reg = globalThis[DYN];
+    if (reg && path in reg) return Promise.resolve(reg[path]);
+    if (inflight.has(path)) return inflight.get(path);
+    const p = Promise.resolve(runTLA(path)).then(
+      () => { inflight.delete(path); return globalThis[DYN][path]; },
+      (e) => { inflight.delete(path); throw e; },
+    );
+    inflight.set(path, p);
+    return p;
+  };
+  globalThis[Symbol.for("og.import")] = (spec, dir) => Promise.resolve().then(() => {
+    const info = resolveDyn(String(spec), String(dir == null ? root : dir));
+    if (info.tla) return loadTLA(info.path);
+    return toNamespace(cjsRequire(info.path));
+  });
   function makeRequire(fromDir) {
     const require = (id) => cjsRequire(resolve(String(id), fromDir));
     // require.resolve(id, { paths }) is how Babel and others locate plugins.
