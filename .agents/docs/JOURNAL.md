@@ -560,3 +560,26 @@ Fix: `LoadNext` now sets `h.TopLevelAwait = true` around its `Bundle` call (save
 
 - Files: `internal/jshost/nextconfig.go`, `internal/jshost/nextconfig_test.go`.
 - Test: `TestLoadNextTopLevelAwait` — a `next.config.mjs` importing a local `tla.mjs` (`export const basePath = await Promise.resolve("/tla")`), asserting the config carries `basePath: "/tla"`. Neutralized by flipping the flag back to `false`: fails with the exact reported `"esnext" + 9 overrides` diagnostic (a compile error would not count).
+
+## Async dynamic import for top-level-await modules (nextra builds, take two) — 2026-10-18
+
+PR #8 ("Enable top-level await when loading next.config") misdiagnosed the nextra build failure. It made `LoadNext` opt into `Host.Bundle`'s top-level-await fallback, which is correct as far as it goes — `withNextra` evaluates fine now — but that is not where nextra actually broke. Reproducing a real nextra 4 app showed config load succeeding and the build still failing at the same `"esnext" + 9 overrides` diagnostic, now from a different phase:
+
+```
+rsc:/…/nextra/dist/server/page-map/index.js:4:27: SyntaxError:
+  /…/nextra/dist/server/loader.js: Top-level await is not available in the
+  configured target environment ("esnext" + 9 overrides)
+    at …jshost.(*Host).installRequire.func8 (native)
+    at /…/nextra/loader.cjs:28
+```
+
+Root cause: nextra registers a webpack loader (`nextra/loader.cjs`) for `.md`/`.mdx`. At build time og runs it in the plugin host, where it does `await import("./dist/server/loader.js")`. esbuild lowers `import()` to a synchronous `require()` (the Goja target lists `dynamic-import` unsupported), so `require("./dist/server/loader.js")` goes through `moduleSource`, whose `gojatarget` transform rejects that module's genuine module-scope `const repository = await (…)()`. A synchronous `require()` cannot load a module that awaits at its top level — this is the on-demand require path, which PR #8 never touched (its `Host.Bundle` fallback only applies to bundle entries).
+
+Fix: give the runtime require path a real async `import()`.
+- `moduleSource` rewrites each `import(x)` to `globalThis[Symbol.for("og.import")](x, dir)` (`rewriteDynamicImports`, using `ogapi.DynamicImports` for byte offsets), so esbuild no longer lowers it to a sync `require()`.
+- `og.import` (requireFront) resolves the specifier (`og.resolveDyn`, which also reports whether the target awaits at its top level via `moduleHasTLA`). A non-await module takes the old path — a promise of `__toESM(require(...))` (`toNamespace`). A top-level-await module is loaded by `og.runTLA`, which bundles it with `Host.Bundle`'s ESM fallback (evaluation wrapped in `Symbol.for("og.bundleDone")`, namespace recorded under `Symbol.for("og.dynModules")`), evaluates it on the live VM so its exports live in the same realm, and returns the promise; `og.import` reads the namespace once it settles. In-flight loads dedupe through a `Map`.
+- Static `require()` of a top-level-await module still errors, as in Node.
+
+- Files: `internal/jshost/jshost.go` (`rewriteDynamicImports`, `asyncImport`), `internal/jshost/require.go` (`moduleSource` rewrite, `moduleHasTLA`, `resolveDyn`/`runTLA`, `requireFront`'s `og.import`), `internal/jshost/asyncimport_test.go`.
+- Test: `TestAsyncDynamicImportTLA` — a runtime-required `.cjs` that awaits a literal and a computed `import()`, one target awaiting at its top level. Neutralized (forcing `moduleHasTLA`'s result to `false`) it fails with the exact reported `"esnext" + 9 overrides` diagnostic — a behavioral failure, not a compile error. `TestModuleHasTLA` pins the detection (top-level await yes; `await` inside an async function no; CommonJS no).
+- Pitfall / known gap: this unblocks nextra's top-level await, but a full nextra build then fails on `@napi-rs/simple-git` (nextra's git-timestamp feature), a native addon og cannot `dlopen` and which ships no WebAssembly fallback. nextra guards it with `if (process.versions.webcontainer) return;`. Handling native-optional dynamic imports is a separate decision, left open.

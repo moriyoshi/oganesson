@@ -248,6 +248,44 @@ func localizeImports(path, code string) string {
 	return sb.String()
 }
 
+// asyncImport is the global that replaces import() in modules loaded through
+// the runtime require (moduleSource): og.import(specifier, dir) resolves the
+// specifier from dir and returns a promise of the module namespace, awaiting a
+// top-level-await module's evaluation instead of failing the Goja target
+// (require.go). esbuild would otherwise lower import() to a synchronous
+// require(), which cannot load a module that awaits at its top level.
+const asyncImport = "og.import"
+
+// rewriteDynamicImports turns each import(x) call in code (the file at path)
+// into globalThis[Symbol.for("og.import")](x, dir), so the runtime handles it
+// rather than esbuild lowering it to a synchronous require(). Only the first
+// argument is kept; import attributes (the options argument) are dropped, as
+// the Goja runtime ignores them.
+func rewriteDynamicImports(path, code string) string {
+	if !strings.Contains(code, "import(") {
+		return code
+	}
+	ims := ogapi.DynamicImports(path, code)
+	if len(ims) == 0 {
+		return code
+	}
+	dir := jsonString(filepath.Dir(path))
+	var sb strings.Builder
+	last := 0
+	for _, im := range ims {
+		if im.Start < last {
+			continue // nested in a call already rewritten
+		}
+		sb.WriteString(code[last:im.Start])
+		sb.WriteString(`globalThis[Symbol.for("` + asyncImport + `")](`)
+		sb.WriteString(code[im.ArgStart:im.ArgEnd])
+		sb.WriteString(`, ` + dir + `)`)
+		last = im.End
+	}
+	sb.WriteString(code[last:])
+	return sb.String()
+}
+
 // fileLocalsPlugin gives each source file its own __dirname, __filename and
 // import.meta.url, as Node would.
 func (h *Host) fileLocalsPlugin() api.Plugin {
