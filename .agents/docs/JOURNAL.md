@@ -549,3 +549,14 @@ variable differently degrades to a cause-less throw rather than a ReferenceError
 The substitution still gates on the line-18 literal being present, so a loader
 that drops the `lightningcss-${parts.join('-')}` package form entirely is not
 rewritten (acceptable: no `.node` fallback to reach in that shape either).
+
+## next.config top-level await (nextra withNextra)
+
+A user hit `nextra/dist/client/pages.js:3:35: SyntaxError: .../nextra/dist/server/loader.js: Top-level await is not available in the configured target environment ("esnext" + 9 overrides)` building a nextra docs site. The `9 overrides` are exactly `gojatarget.Unsupported` (top-level-await among them), so bundling for the Goja build host rejects any transitively-imported module that awaits at its top level.
+
+`jshost.Host.Bundle` already has the fix for this: when `h.TopLevelAwait` is set and the default IIFE/script build fails with that error, it retries as ESM output with `top-level-await` re-enabled and wraps the result in a `bundleDone` async IIFE (`jshost.go:329-347`); `EvalWith` awaits that symbol before reading the result expression (`jshost.go:614-619`). The Vite frameworks, `RunProgram`'s bundled path, and the Prisma migrate host all opt in. `LoadNext` did not — but `withNextra` pulls `nextra/dist/{client/pages,server/loader}.js`, both top-level await, into the `next.config` graph that `LoadNext` bundles.
+
+Fix: `LoadNext` now sets `h.TopLevelAwait = true` around its `Bundle` call (save/restore, mirroring the existing `Alias` save/restore). Scoping it to the function keeps it independent of how the caller configured the host, so the direct-`Host`-construction tests exercise it too.
+
+- Files: `internal/jshost/nextconfig.go`, `internal/jshost/nextconfig_test.go`.
+- Test: `TestLoadNextTopLevelAwait` — a `next.config.mjs` importing a local `tla.mjs` (`export const basePath = await Promise.resolve("/tla")`), asserting the config carries `basePath: "/tla"`. Neutralized by flipping the flag back to `false`: fails with the exact reported `"esnext" + 9 overrides` diagnostic (a compile error would not count).
