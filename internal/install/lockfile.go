@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -394,27 +396,59 @@ func (p *pnpmLock) file() string { return "pnpm-lock.yaml" }
 
 func parsePnpmLock(b []byte) (*pnpmLock, error) {
 	type deps map[string]any
-	var doc struct {
-		LockfileVersion any `yaml:"lockfileVersion"`
-		Importers       map[string]struct {
-			Dependencies         deps `yaml:"dependencies"`
-			DevDependencies      deps `yaml:"devDependencies"`
-			OptionalDependencies deps `yaml:"optionalDependencies"`
-		} `yaml:"importers"`
-		Packages map[string]struct {
-			Resolution struct {
-				Integrity string `yaml:"integrity"`
-			} `yaml:"resolution"`
-			Dependencies         map[string]string `yaml:"dependencies"`
-			OptionalDependencies map[string]string `yaml:"optionalDependencies"`
-		} `yaml:"packages"`
-		Snapshots map[string]struct {
-			Dependencies         map[string]string `yaml:"dependencies"`
-			OptionalDependencies map[string]string `yaml:"optionalDependencies"`
-		} `yaml:"snapshots"`
+	type importer struct {
+		Dependencies         deps `yaml:"dependencies"`
+		DevDependencies      deps `yaml:"devDependencies"`
+		OptionalDependencies deps `yaml:"optionalDependencies"`
 	}
-	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, err
+	type pkgEntry struct {
+		Resolution struct {
+			Integrity string `yaml:"integrity"`
+		} `yaml:"resolution"`
+		Dependencies         map[string]string `yaml:"dependencies"`
+		OptionalDependencies map[string]string `yaml:"optionalDependencies"`
+	}
+	type snapshot struct {
+		Dependencies         map[string]string `yaml:"dependencies"`
+		OptionalDependencies map[string]string `yaml:"optionalDependencies"`
+	}
+	type lockDoc struct {
+		LockfileVersion any                 `yaml:"lockfileVersion"`
+		Importers       map[string]importer `yaml:"importers"`
+		Packages        map[string]pkgEntry `yaml:"packages"`
+		Snapshots       map[string]snapshot `yaml:"snapshots"`
+	}
+	// pnpm can split the lockfile across multiple YAML documents (metadata in
+	// the first, importers/packages/snapshots in later ones), and a single
+	// Unmarshal reads only the first. Decode every document and merge them, so
+	// a later document's importers are not silently dropped (which would make
+	// every root dependency look absent).
+	doc := lockDoc{
+		Importers: map[string]importer{},
+		Packages:  map[string]pkgEntry{},
+		Snapshots: map[string]snapshot{},
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	for {
+		var d lockDoc
+		if err := dec.Decode(&d); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		if d.LockfileVersion != nil {
+			doc.LockfileVersion = d.LockfileVersion
+		}
+		for k, v := range d.Importers {
+			doc.Importers[k] = v
+		}
+		for k, v := range d.Packages {
+			doc.Packages[k] = v
+		}
+		for k, v := range d.Snapshots {
+			doc.Snapshots[k] = v
+		}
 	}
 	v, _ := strconv.ParseFloat(fmt.Sprint(doc.LockfileVersion), 64)
 	if v < 6 {
@@ -448,7 +482,7 @@ func parsePnpmLock(b []byte) (*pnpmLock, error) {
 	for key, pkg := range doc.Packages {
 		k := strings.TrimPrefix(key, "/") // v6 keys start with "/"
 		p.integrity[stripPeers(k)] = pkg.Resolution.Integrity
-		if doc.Snapshots == nil { // v6: dependencies live on packages
+		if len(doc.Snapshots) == 0 { // v6: dependencies live on packages
 			p.snapshots[k] = merge(pkg.Dependencies, pkg.OptionalDependencies)
 		}
 	}
