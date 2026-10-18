@@ -172,7 +172,13 @@ func (b *builder) runPrisma(ctx context.Context, c npmscript.Command, log func(s
 	if err != nil {
 		return fmt.Errorf("next: `%s`: %w", strings.Join(c.Args, " "), err)
 	}
-	env := map[string]string{"CHECKPOINT_DISABLE": "1"}
+	// og presents a Linux platform to the Prisma CLI, but there is no real
+	// libssl for @prisma/get-platform to probe, so it emits a spurious
+	// "failed to detect the libssl/openssl version" warning (and defaults to
+	// openssl-1.1.x). This is a false positive by construction here: og runs
+	// `generate` only, which never loads a native engine. Silence it with
+	// Prisma's own knob. CHECKPOINT_DISABLE likewise mutes Prisma telemetry.
+	env := map[string]string{"CHECKPOINT_DISABLE": "1", "PRISMA_DISABLE_WARNINGS": "1"}
 	for k, v := range c.Env {
 		env[k] = v
 	}
