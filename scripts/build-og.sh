@@ -7,6 +7,7 @@
 # - OG_VERSION: the release version, stamped into main.version. og build
 #   -eject pins github.com/moriyoshi/oganesson at it in the ejected go.mod,
 #   so it must be the module version of this source (the release tag).
+# - OG_ENGINE=ekuma: select the experimental Ekuma backend.
 # - CGO_ENABLED=0: Oganesson is pure Go.
 # - -tags nodynamic: gen2brain/webp (the /_next/image WebP encoder) would
 #   otherwise dlopen a system libwebp when one is installed; with the tag it
@@ -32,5 +33,10 @@ if [ -n "$version" ] && ! printf '%s\n' "$version" | grep -Eq '^v(0|[1-9][0-9]*)
   exit 1
 fi
 cd "$root"
-CGO_ENABLED=0 go build -trimpath -tags nodynamic -ldflags "-s -w -X main.version=$version" -o "$out" ./cmd/og
+case ${OG_ENGINE:-sobek} in
+  sobek) tags=nodynamic ;;
+  ekuma) tags=nodynamic,ekuma ;;
+  *) echo "build-og.sh: unknown engine: $OG_ENGINE" >&2; exit 1 ;;
+esac
+CGO_ENABLED=0 go build -trimpath -tags "$tags" -ldflags "-s -w -X main.version=$version" -o "$out" ./cmd/og
 echo "built $out${version:+ $version}${target:+ ($target)}"

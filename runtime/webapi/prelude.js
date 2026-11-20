@@ -60174,7 +60174,7 @@ Please __addLocaleData before adding additional unit data`);
     const S2 = Symbol;
     if (!S2.dispose) Object.defineProperty(Symbol, "dispose", { value: /* @__PURE__ */ Symbol("Symbol.dispose") });
     if (!S2.asyncDispose) Object.defineProperty(Symbol, "asyncDispose", { value: /* @__PURE__ */ Symbol("Symbol.asyncDispose") });
-    installProxyHasInstance();
+    if (true) installProxyHasInstance();
   }
   function installProxyHasInstance() {
     const NativeProxy = Proxy;
@@ -65902,7 +65902,7 @@ Content-Type: ${value.type || "application/octet-stream"}\r
   // js/src/index.ts
   function install(host2) {
     setHost(host2);
-    installRegExp();
+    if (true) installRegExp();
     installPolyfills();
     installConsole();
     installTimers();
@@ -65922,7 +65922,7 @@ Content-Type: ${value.type || "application/octet-stream"}\r
     installStructuredClone();
     installMessaging();
     installGlobals();
-    installIntl();
+    if (true) installIntl();
     defineGlobal("AsyncLocalStorage", host2.AsyncLocalStorage);
     Object.defineProperty(globalThis, /* @__PURE__ */ Symbol.for("og.internals"), {
       value: {

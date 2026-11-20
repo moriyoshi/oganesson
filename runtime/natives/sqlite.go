@@ -21,7 +21,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/vfs"
 	"modernc.org/sqlite" // database/sql driver "sqlite"
 )
@@ -208,7 +208,7 @@ type sqliteDB struct {
 }
 
 type sqliteBinding struct {
-	vm   *sobek.Runtime
+	vm   *jsvm.Runtime
 	svc  *SQLite
 	ctx  context.Context
 	dbs  map[int64]*sqliteDB
@@ -315,12 +315,12 @@ func (b *sqliteBinding) closeAll() {
 
 // args converts better-sqlite3 bindings: positional values and, from a
 // plain object, named parameters.
-func (b *sqliteBinding) args(positional []sobek.Value, named sobek.Value) []any {
+func (b *sqliteBinding) args(positional []jsvm.Value, named jsvm.Value) []any {
 	var out []any
 	for _, v := range positional {
 		out = append(out, b.toSQL(v))
 	}
-	if named != nil && !sobek.IsUndefined(named) && !sobek.IsNull(named) {
+	if named != nil && !jsvm.IsUndefined(named) && !jsvm.IsNull(named) {
 		o := named.ToObject(b.vm)
 		for _, k := range o.Keys() {
 			out = append(out, sql.Named(k, b.toSQL(o.Get(k))))
@@ -329,8 +329,8 @@ func (b *sqliteBinding) args(positional []sobek.Value, named sobek.Value) []any 
 	return out
 }
 
-func (b *sqliteBinding) toSQL(v sobek.Value) any {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (b *sqliteBinding) toSQL(v jsvm.Value) any {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return nil
 	}
 	switch x := v.Export().(type) {
@@ -350,7 +350,7 @@ func (b *sqliteBinding) toSQL(v sobek.Value) any {
 		return x
 	case []byte:
 		return append([]byte(nil), x...)
-	case sobek.ArrayBuffer:
+	case jsvm.ArrayBuffer:
 		return append([]byte(nil), x.Bytes()...)
 	}
 	panic(b.vm.NewTypeError("SQLite3 can only bind numbers, strings, bigints, buffers, and null"))
@@ -372,7 +372,7 @@ func (b *sqliteBinding) toJS(v any, safeIntegers bool) any {
 }
 
 // run(id, sql, positional, named) -> {changes, lastInsertRowid}
-func (b *sqliteBinding) run(id int64, q string, positional []sobek.Value, named sobek.Value) sobek.Value {
+func (b *sqliteBinding) run(id int64, q string, positional []jsvm.Value, named jsvm.Value) jsvm.Value {
 	res, err := b.db(id).conn.ExecContext(b.ctx, q, b.args(positional, named)...)
 	if err != nil {
 		b.throw(err)
@@ -383,7 +383,7 @@ func (b *sqliteBinding) run(id int64, q string, positional []sobek.Value, named 
 }
 
 // query(id, sql, positional, named, safeIntegers, limit) -> {columns, rows}
-func (b *sqliteBinding) query(id int64, q string, positional []sobek.Value, named sobek.Value, safeIntegers bool, limit int) sobek.Value {
+func (b *sqliteBinding) query(id int64, q string, positional []jsvm.Value, named jsvm.Value, safeIntegers bool, limit int) jsvm.Value {
 	var args []driver.NamedValue
 	for i, a := range b.args(positional, named) {
 		nv := driver.NamedValue{Ordinal: i + 1, Value: a}
@@ -434,7 +434,7 @@ func (b *sqliteBinding) query(id int64, q string, positional []sobek.Value, name
 // better-sqlite3's statement.columns() does, from the prepared statement
 // (modernc's ColumnInfo), without running it: name, column, table and
 // database (null for expressions), type (the declared type, or null).
-func (b *sqliteBinding) columns(id int64, q string) sobek.Value {
+func (b *sqliteBinding) columns(id int64, q string) jsvm.Value {
 	var out []any
 	err := b.db(id).conn.Raw(func(dc any) error {
 		ci, ok := dc.(interface {
@@ -522,7 +522,7 @@ func (b *sqliteBinding) exec(id int64, q string) {
 	}
 }
 
-func installSQLite(vm *sobek.Runtime, svc *SQLite) (*sobek.Object, func()) {
+func installSQLite(vm *jsvm.Runtime, svc *SQLite) (*jsvm.Object, func()) {
 	b := &sqliteBinding{vm: vm, svc: svc, ctx: context.Background(), dbs: map[int64]*sqliteDB{}}
 	o := vm.NewObject()
 	_ = o.Set("open", b.open)

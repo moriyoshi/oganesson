@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // newTestEngine exposes the host object as globalThis.host for tests.
@@ -25,7 +25,7 @@ func newTestEngine(t *testing.T) *Engine {
 
 func runJS(t *testing.T, e *Engine, src string) {
 	t.Helper()
-	err := e.Run(context.Background(), func(vm *sobek.Runtime) error {
+	err := e.Run(context.Background(), func(vm *jsvm.Runtime) error {
 		_, err := vm.RunString(src)
 		return err
 	})
@@ -86,14 +86,14 @@ func TestUnrefTimerDoesNotKeepLoopAlive(t *testing.T) {
 func TestAsyncLocalStoragePropagation(t *testing.T) {
 	e := newTestEngine(t)
 	// A Go async op started inside run() must complete in the same context.
-	_ = e.Host.Set("goAsync", func(fc sobek.FunctionCall) sobek.Value {
-		cb, _ := sobek.AssertFunction(fc.Argument(0))
+	_ = e.Host.Set("goAsync", func(fc jsvm.FunctionCall) jsvm.Value {
+		cb, _ := jsvm.AssertFunction(fc.Argument(0))
 		complete := e.Loop.Async()
 		go func() {
 			time.Sleep(2 * time.Millisecond)
-			complete(func(*sobek.Runtime) error { _, err := cb(sobek.Undefined()); return err })
+			complete(func(*jsvm.Runtime) error { _, err := cb(jsvm.Undefined()); return err })
 		}()
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
 	runJS(t, e, `
 		const als = new ALS();
@@ -148,7 +148,7 @@ func TestInterruptOnContextCancel(t *testing.T) {
 	e := newTestEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	err := e.Run(ctx, func(vm *sobek.Runtime) error {
+	err := e.Run(ctx, func(vm *jsvm.Runtime) error {
 		_, err := vm.RunString(`host.timers.set(() => { for (;;) {} }, 0)`)
 		return err
 	})
@@ -173,7 +173,7 @@ func TestUncaughtHandlerCanContinue(t *testing.T) {
 
 func TestRunReturnsInitialErrorDespiteLenientHandler(t *testing.T) {
 	e := New(Options{Uncaught: func(error) error { return nil }})
-	err := e.Run(context.Background(), func(vm *sobek.Runtime) error {
+	err := e.Run(context.Background(), func(vm *jsvm.Runtime) error {
 		_, err := vm.RunString(`throw new Error("top-level")`)
 		return err
 	})
@@ -194,11 +194,11 @@ func TestCallStackLimit(t *testing.T) {
 	if got := joinedLog(t, e); got != "5000" {
 		t.Fatalf("got %s", got)
 	}
-	err := e.Run(context.Background(), func(vm *sobek.Runtime) error {
+	err := e.Run(context.Background(), func(vm *jsvm.Runtime) error {
 		_, err := vm.RunString(`function down(n) { return down(n + 1) + 1; } down(0);`)
 		return err
 	})
-	if err == nil || !strings.HasPrefix(err.Error(), "RangeError: Maximum call stack size exceeded") {
+	if err == nil || !strings.HasPrefix(strings.ToLower(err.Error()), "rangeerror: maximum call stack size exceeded") {
 		t.Fatalf("err %v", err)
 	}
 }

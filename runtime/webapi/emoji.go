@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // emojiProperty is one ECMAScript property of strings (emoji_tables.go,
@@ -43,10 +43,10 @@ func classBody(name string, p emojiProperty) string {
 // { content, strings } (a class body for the single code points, and the
 // longer strings), or undefined for other names.
 func (h *host) installStringProperties() {
-	h.set("stringProperty", func(name string) sobek.Value {
+	h.set("stringProperty", func(name string) jsvm.Value {
 		p, ok := emojiProperties[name]
 		if !ok {
-			return sobek.Undefined()
+			return jsvm.Undefined()
 		}
 		strs := make([]any, len(p.strings))
 		for i, s := range p.strings {

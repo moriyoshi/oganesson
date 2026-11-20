@@ -1,3 +1,8 @@
+declare global {
+  // Set by genprelude so esbuild can remove engine-specific fallback code.
+  const __ogNativeBuiltins: boolean;
+}
+
 // The Go host object, injected by webapi.Install. Shapes mirror the Go
 // registrations in runtime/engine and runtime/webapi.
 export interface Host {

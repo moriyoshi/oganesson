@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"github.com/moriyoshi/oganesson/runtime/tlsroots"
 )
@@ -41,8 +41,8 @@ func NewSockets() *Sockets { return &Sockets{} }
 // writer goroutine, in order.
 type sock struct {
 	conn   net.Conn
-	emit   func(func(*sobek.Runtime) error)
-	onEvt  sobek.Callable
+	emit   func(func(*jsvm.Runtime) error)
+	onEvt  jsvm.Callable
 	writes chan sockOp
 
 	mu        sync.Mutex
@@ -68,7 +68,7 @@ type sockOp struct {
 type netBinding struct {
 	svc   *Sockets
 	e     *engine.Engine
-	vm    *sobek.Runtime
+	vm    *jsvm.Runtime
 	socks map[int64]*sock
 	next  int64
 }
@@ -91,11 +91,11 @@ func InstallNet(e *engine.Engine, svc *Sockets) error {
 	_ = o.Set("setKeepAlive", b.setKeepAlive)
 	_ = o.Set("startTLS", b.startTLS)
 	_ = o.Set("isIP", isIP)
-	_ = o.Set("canonicalizeIP", func(s string) sobek.Value {
+	_ = o.Set("canonicalizeIP", func(s string) jsvm.Value {
 		if a, err := netip.ParseAddr(s); err == nil {
 			return b.vm.ToValue(a.WithZone("").String())
 		}
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
 	// node:tls rootCertificates: the embedded Mozilla roots (tlsroots also
 	// installs them as crypto/x509's fallback for TLS verification). Importing
@@ -106,8 +106,8 @@ func InstallNet(e *engine.Engine, svc *Sockets) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), o)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), o)
 	return err
 }
 
@@ -219,7 +219,7 @@ func addrInfo(a net.Addr) (string, int, string) {
 // connect(opts, onEvent) -> id. opts: host, port, path (a Unix socket),
 // timeout (ms), localAddress, localPort, family. onEvent(type, a): "connect"
 // with the endpoints, "data" (ArrayBuffer), "end", "error" (errInfo).
-func (b *netBinding) connect(opts map[string]any, onEvent sobek.Callable) int64 {
+func (b *netBinding) connect(opts map[string]any, onEvent jsvm.Callable) int64 {
 	str := func(k string) string { s, _ := opts[k].(string); return s }
 	num := func(k string) int64 {
 		switch v := opts[k].(type) {
@@ -282,7 +282,7 @@ func (b *netBinding) connect(opts map[string]any, onEvent sobek.Callable) int64 
 				conn = tc
 			}
 		}
-		done(func(vm *sobek.Runtime) error {
+		done(func(vm *jsvm.Runtime) error {
 			if s.closed {
 				if conn != nil {
 					_ = conn.Close()
@@ -294,11 +294,11 @@ func (b *netBinding) connect(opts map[string]any, onEvent sobek.Callable) int64 
 				if network == "unix" {
 					errHost, port = address, 0
 				}
-				_, cerr := onEvent(sobek.Undefined(), vm.ToValue("error"), vm.ToValue(errInfo(err, "connect", errHost, port)))
+				_, cerr := onEvent(jsvm.Undefined(), vm.ToValue("error"), vm.ToValue(errInfo(err, "connect", errHost, port)))
 				return cerr
 			}
 			if tlsErr != nil {
-				_, cerr := onEvent(sobek.Undefined(), vm.ToValue("error"), vm.ToValue(tlsErrInfo(tlsErr)))
+				_, cerr := onEvent(jsvm.Undefined(), vm.ToValue("error"), vm.ToValue(tlsErrInfo(tlsErr)))
 				return cerr
 			}
 			s.conn = conn
@@ -308,11 +308,11 @@ func (b *netBinding) connect(opts map[string]any, onEvent sobek.Callable) int64 
 			la, lp, lf := addrInfo(conn.LocalAddr())
 			ra, rp, rf := addrInfo(conn.RemoteAddr())
 			info := map[string]any{"localAddress": la, "localPort": lp, "localFamily": lf, "remoteAddress": ra, "remotePort": rp, "remoteFamily": rf}
-			if _, cerr := onEvent(sobek.Undefined(), vm.ToValue("connect"), vm.ToValue(info)); cerr != nil {
+			if _, cerr := onEvent(jsvm.Undefined(), vm.ToValue("connect"), vm.ToValue(info)); cerr != nil {
 				return cerr
 			}
 			if tc, ok := conn.(*tls.Conn); ok {
-				_, cerr := onEvent(sobek.Undefined(), vm.ToValue("secure"), vm.ToValue(t.secureInfo(vm, tc.ConnectionState())))
+				_, cerr := onEvent(jsvm.Undefined(), vm.ToValue("secure"), vm.ToValue(t.secureInfo(vm, tc.ConnectionState())))
 				return cerr
 			}
 			return nil
@@ -371,14 +371,14 @@ func (s *sock) startReader() {
 			if n > 0 {
 				chunk := make([]byte, n)
 				copy(chunk, buf[:n])
-				s.post("data", func(vm *sobek.Runtime) sobek.Value { return vm.ToValue(vm.NewArrayBuffer(chunk)) })
+				s.post("data", func(vm *jsvm.Runtime) jsvm.Value { return vm.ToValue(vm.NewArrayBuffer(chunk)) })
 			}
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					s.post("end", nil)
 				} else {
 					info := errInfo(err, "read", "", 0)
-					s.post("error", func(vm *sobek.Runtime) sobek.Value { return vm.ToValue(info) })
+					s.post("error", func(vm *jsvm.Runtime) jsvm.Value { return vm.ToValue(info) })
 				}
 				return
 			}
@@ -388,19 +388,19 @@ func (s *sock) startReader() {
 
 // post delivers an event to the socket's JS object, unless it was closed
 // meanwhile.
-func (s *sock) post(typ string, arg func(*sobek.Runtime) sobek.Value) {
-	s.emit(func(vm *sobek.Runtime) error {
+func (s *sock) post(typ string, arg func(*jsvm.Runtime) jsvm.Value) {
+	s.emit(func(vm *jsvm.Runtime) error {
 		s.mu.Lock()
 		closed := s.closed
 		s.mu.Unlock()
 		if closed {
 			return nil
 		}
-		a := sobek.Undefined()
+		a := jsvm.Undefined()
 		if arg != nil {
 			a = arg(vm)
 		}
-		_, err := s.onEvt(sobek.Undefined(), vm.ToValue(typ), a)
+		_, err := s.onEvt(jsvm.Undefined(), vm.ToValue(typ), a)
 		return err
 	})
 }
@@ -450,13 +450,13 @@ func (s *sock) writer() {
 func (b *netBinding) sock(id int64) *sock {
 	s := b.socks[id]
 	if s == nil || s.conn == nil {
-		panic(b.vm.NewTypeError("og: socket %d is not open", id))
+		panic(b.vm.NewTypeError(fmt.Sprintf("og: socket %d is not open", id)))
 	}
 	return s
 }
 
 // write(id, bytes, cb): cb(null) once written, or cb(errInfo).
-func (b *netBinding) write(id int64, data []byte, cb sobek.Callable) {
+func (b *netBinding) write(id int64, data []byte, cb jsvm.Callable) {
 	s := b.sock(id)
 	buf := make([]byte, len(data))
 	copy(buf, data)
@@ -465,19 +465,19 @@ func (b *netBinding) write(id int64, data []byte, cb sobek.Callable) {
 
 // shutdown(id, cb): the write side ends (FIN, or TLS close_notify) after
 // the queued writes.
-func (b *netBinding) shutdown(id int64, cb sobek.Callable) {
+func (b *netBinding) shutdown(id int64, cb jsvm.Callable) {
 	b.queue(b.sock(id), sockOp{shutdown: true}, cb, "shutdown")
 }
 
-func (b *netBinding) queue(s *sock, op sockOp, cb sobek.Callable, sys string) {
+func (b *netBinding) queue(s *sock, op sockOp, cb jsvm.Callable, sys string) {
 	done := b.e.Loop.Async()
 	op.done = func(err error) {
-		done(func(vm *sobek.Runtime) error {
-			arg := sobek.Null()
+		done(func(vm *jsvm.Runtime) error {
+			arg := jsvm.Null()
 			if err != nil {
 				arg = vm.ToValue(errInfo(err, sys, "", 0))
 			}
-			_, cerr := cb(sobek.Undefined(), arg)
+			_, cerr := cb(jsvm.Undefined(), arg)
 			return cerr
 		})
 	}
@@ -664,7 +664,7 @@ func (b *netBinding) tlsSetup(opts map[string]any) *tlsSetup {
 
 // secureInfo is the "secure" event's argument: the session and the
 // chain's verdict.
-func (t *tlsSetup) secureInfo(vm *sobek.Runtime, st tls.ConnectionState) map[string]any {
+func (t *tlsSetup) secureInfo(vm *jsvm.Runtime, st tls.ConnectionState) map[string]any {
 	info := map[string]any{
 		"verifyError": t.authErr, "alpnProtocol": st.NegotiatedProtocol,
 		"protocol": tlsVersionName(st.Version), "cipher": tls.CipherSuiteName(st.CipherSuite),
@@ -683,7 +683,7 @@ func tlsErrInfo(err error) map[string]any {
 // place, as tls.connect({ socket }) does with a connected socket. The
 // reader stops first (bytes it took go to the handshake); onEvent then
 // receives "secure" and the socket's events.
-func (b *netBinding) startTLS(id int64, opts map[string]any, onEvent sobek.Callable) {
+func (b *netBinding) startTLS(id int64, opts map[string]any, onEvent jsvm.Callable) {
 	s := b.sock(id)
 	t := b.tlsSetup(opts)
 	s.mu.Lock()
@@ -729,7 +729,7 @@ func (b *netBinding) startTLS(id int64, opts map[string]any, onEvent sobek.Calla
 			err = tc.Handshake()
 			state, conn = tc.ConnectionState(), tc
 		}
-		done(func(vm *sobek.Runtime) error {
+		done(func(vm *jsvm.Runtime) error {
 			s.mu.Lock()
 			s.upgrading = false
 			closed := s.closed
@@ -742,11 +742,11 @@ func (b *netBinding) startTLS(id int64, opts map[string]any, onEvent sobek.Calla
 				return nil
 			}
 			if err != nil {
-				_, cerr := onEvent(sobek.Undefined(), vm.ToValue("error"), vm.ToValue(tlsErrInfo(err)))
+				_, cerr := onEvent(jsvm.Undefined(), vm.ToValue("error"), vm.ToValue(tlsErrInfo(err)))
 				return cerr
 			}
 			s.startReader()
-			_, cerr := onEvent(sobek.Undefined(), vm.ToValue("secure"), vm.ToValue(t.secureInfo(vm, state)))
+			_, cerr := onEvent(jsvm.Undefined(), vm.ToValue("secure"), vm.ToValue(t.secureInfo(vm, state)))
 			return cerr
 		})
 	}()
@@ -830,7 +830,7 @@ func verifyChain(certs []*x509.Certificate, roots *x509.CertPool) string {
 }
 
 // certInfo is a certificate as getPeerCertificate() describes it.
-func certInfo(vm *sobek.Runtime, c *x509.Certificate) map[string]any {
+func certInfo(vm *jsvm.Runtime, c *x509.Certificate) map[string]any {
 	name := func(n []string) any {
 		if len(n) == 1 {
 			return n[0]

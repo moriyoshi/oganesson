@@ -15,7 +15,9 @@ import (
 
 	"github.com/moriyoshi/oganesson/internal/frameworks/next"
 	"github.com/moriyoshi/oganesson/internal/frameworks/vite"
+	"github.com/moriyoshi/oganesson/internal/gojatarget"
 	"github.com/moriyoshi/oganesson/internal/jshost"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/internal/nativegen"
 	"github.com/moriyoshi/oganesson/pack"
 	"github.com/moriyoshi/oganesson/runtime/app"
@@ -124,13 +126,19 @@ func runBuild(ctx context.Context, args []string) error {
 	if err := writeTypes(dir); err != nil {
 		return err
 	}
+	// The bundle must also run during prerendering on the build host.
+	// Ejected projects can be built without the ekuma tag.
+	backend := gojatarget.Sobek
+	if jsvm.UsesEkuma && *ejectDir == "" && (runtimeExe == "" || runtimeUsesEkuma(runtimeExe)) {
+		backend = gojatarget.Ekuma
+	}
 	start := time.Now()
 	var files map[string][]byte
 	if !isNextProject(dir) && vite.Detect(dir) {
-		if files, err = buildVite(ctx, dir, start); err != nil {
+		if files, err = buildVite(ctx, dir, start, backend); err != nil {
 			return err
 		}
-	} else if files, err = buildNext(ctx, dir, start, *readable, prerenderExe); err != nil {
+	} else if files, err = buildNext(ctx, dir, start, *readable, prerenderExe, backend); err != nil {
 		return err
 	}
 
@@ -221,8 +229,12 @@ func delocalize(p string, locales []string) string {
 // buildNext builds a Next.js project into the app payload (and .og/).
 // With prerenderExe (an app binary with the project's native Go modules,
 // for this platform), static pages prerender in it.
-func buildNext(ctx context.Context, dir string, start time.Time, readable bool, prerenderExe string) (map[string][]byte, error) {
-	res, err := next.Build(ctx, dir, next.Options{Log: func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) }, Readable: readable})
+func buildNext(ctx context.Context, dir string, start time.Time, readable bool, prerenderExe string, backend gojatarget.Backend) (map[string][]byte, error) {
+	res, err := next.Build(ctx, dir, next.Options{
+		Log:           func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) },
+		Readable:      readable,
+		ServerBackend: backend,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -308,8 +320,11 @@ func buildNext(ctx context.Context, dir string, start time.Time, readable bool, 
 
 // buildVite builds a Vite project: Vite's production build (the client,
 // served like vite preview).
-func buildVite(ctx context.Context, dir string, start time.Time) (map[string][]byte, error) {
-	res, err := vite.Build(ctx, dir, vite.Options{Log: func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) }})
+func buildVite(ctx context.Context, dir string, start time.Time, backend gojatarget.Backend) (map[string][]byte, error) {
+	res, err := vite.Build(ctx, dir, vite.Options{
+		Log:           func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) },
+		ServerBackend: backend,
+	})
 	if err != nil {
 		return nil, err
 	}

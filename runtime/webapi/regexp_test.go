@@ -6,6 +6,7 @@ import (
 
 	"github.com/evanw/esbuild/pkg/api"
 	"github.com/moriyoshi/oganesson/internal/gojatarget"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/webapi"
 )
 
@@ -38,7 +39,17 @@ func TestRegExpPropertyEscapes(t *testing.T) {
 		{"v flag set notation", `try { new RegExp("[\\p{L}--[a-z]]", "v"); return "no error"; } catch (e) { return e.name; }`, "no error"},
 		{"u and v", `try { new RegExp("a", "uv"); return "no error"; } catch (e) { return e.name; }`, "SyntaxError"},
 	} {
-		check(t, c.name, eval(t, webapi.Options{}, c.js), c.want)
+		want := c.want
+		if jsvm.UsesEkuma {
+			// Native diagnostics preserve the error kind and reason.
+			switch c.name {
+			case "invalid":
+				want = "SyntaxError: invalid regular expression: invalid property name"
+			case "other syntax errors in V8's form":
+				want = "invalid regular expression: numbers out of order in {} quantifier"
+			}
+		}
+		check(t, c.name, eval(t, webapi.Options{}, c.js), want)
 	}
 }
 

@@ -22,7 +22,7 @@ import (
 	"hash"
 	"math/big"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // installCrypto registers the primitives behind crypto and crypto.subtle.
@@ -32,34 +32,34 @@ import (
 // (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP) are supported, with raw/spki/pkcs8/jwk
 // key formats. This covers the WebCrypto asymmetric algorithms.
 func (h *host) installCrypto() {
-	h.set("randomBytes", func(n int) sobek.Value {
+	h.set("randomBytes", func(n int) jsvm.Value {
 		b := make([]byte, n)
 		_, _ = rand.Read(b)
 		return h.buffer(b)
 	})
 	h.set("randomUUID", uuid4)
-	h.set("digest", func(alg string, data sobek.Value) sobek.Value {
+	h.set("digest", func(alg string, data jsvm.Value) jsvm.Value {
 		newHash := hashFor(alg)
 		if newHash == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		hh := newHash()
 		hh.Write(h.bytes(data))
 		return h.buffer(hh.Sum(nil))
 	})
-	h.set("hmac", func(alg string, key, data sobek.Value) sobek.Value {
+	h.set("hmac", func(alg string, key, data jsvm.Value) jsvm.Value {
 		newHash := hashFor(alg)
 		if newHash == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		m := hmac.New(newHash, h.bytes(key))
 		m.Write(h.bytes(data))
 		return h.buffer(m.Sum(nil))
 	})
-	h.set("aesGcm", func(encrypt bool, key, iv, data, aad sobek.Value, tagBits int) sobek.Value {
+	h.set("aesGcm", func(encrypt bool, key, iv, data, aad jsvm.Value, tagBits int) jsvm.Value {
 		block, err := aes.NewCipher(h.bytes(key))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		nonce := h.bytes(iv)
 		var gcm cipher.AEAD
@@ -71,25 +71,25 @@ func (h *host) installCrypto() {
 		case tagBits/8 == 16:
 			gcm, err = cipher.NewGCM(block)
 		default:
-			return sobek.Null() // non-default tag and nonce sizes together
+			return jsvm.Null() // non-default tag and nonce sizes together
 		}
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		if encrypt {
 			return h.buffer(gcm.Seal(nil, nonce, h.bytes(data), h.bytes(aad)))
 		}
 		out, err := gcm.Open(nil, nonce, h.bytes(data), h.bytes(aad))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(out)
 	})
-	h.set("aesCbc", func(encrypt bool, key, iv, data sobek.Value) sobek.Value {
+	h.set("aesCbc", func(encrypt bool, key, iv, data jsvm.Value) jsvm.Value {
 		block, err := aes.NewCipher(h.bytes(key))
 		in, ivb := h.bytes(data), h.bytes(iv)
 		if err != nil || len(ivb) != aes.BlockSize {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		if encrypt {
 			pad := aes.BlockSize - len(in)%aes.BlockSize
@@ -100,49 +100,49 @@ func (h *host) installCrypto() {
 			return h.buffer(in)
 		}
 		if len(in) == 0 || len(in)%aes.BlockSize != 0 {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		cipher.NewCBCDecrypter(block, ivb).CryptBlocks(in, in)
 		pad := int(in[len(in)-1])
 		if pad == 0 || pad > aes.BlockSize || pad > len(in) {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		for _, b := range in[len(in)-pad:] {
 			if int(b) != pad {
-				return sobek.Null()
+				return jsvm.Null()
 			}
 		}
 		return h.buffer(in[:len(in)-pad])
 	})
-	h.set("aesCtr", func(key, counter, data sobek.Value) sobek.Value {
+	h.set("aesCtr", func(key, counter, data jsvm.Value) jsvm.Value {
 		block, err := aes.NewCipher(h.bytes(key))
 		ctr := h.bytes(counter)
 		if err != nil || len(ctr) != aes.BlockSize {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		in := h.bytes(data)
 		cipher.NewCTR(block, ctr).XORKeyStream(in, in)
 		return h.buffer(in)
 	})
-	h.set("pbkdf2", func(alg string, password, salt sobek.Value, iterations, bits int) sobek.Value {
+	h.set("pbkdf2", func(alg string, password, salt jsvm.Value, iterations, bits int) jsvm.Value {
 		newHash := hashFor(alg)
 		if newHash == nil || iterations <= 0 || bits%8 != 0 {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		out, err := pbkdf2.Key(newHash, string(h.bytes(password)), h.bytes(salt), iterations, bits/8)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(out)
 	})
-	h.set("hkdf", func(alg string, ikm, salt, info sobek.Value, bits int) sobek.Value {
+	h.set("hkdf", func(alg string, ikm, salt, info jsvm.Value, bits int) jsvm.Value {
 		newHash := hashFor(alg)
 		if newHash == nil || bits%8 != 0 {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		out, err := hkdf.Key(newHash, h.bytes(ikm), h.bytes(salt), string(h.bytes(info)), bits/8)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(out)
 	})
@@ -150,72 +150,72 @@ func (h *host) installCrypto() {
 	// Ed25519 (EdDSA): keys are stored raw by the JS layer (the 32-byte seed
 	// for a private key, the 32-byte public key for a public one); the DER
 	// helpers convert to and from the pkcs8/spki import-export formats.
-	h.set("ed25519Generate", func() sobek.Value {
+	h.set("ed25519Generate", func() jsvm.Value {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(priv.Seed())
 	})
-	h.set("ed25519Public", func(seed sobek.Value) sobek.Value {
+	h.set("ed25519Public", func(seed jsvm.Value) jsvm.Value {
 		s := h.bytes(seed)
 		if len(s) != ed25519.SeedSize {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(ed25519.NewKeyFromSeed(s).Public().(ed25519.PublicKey))
 	})
-	h.set("ed25519Sign", func(seed, data sobek.Value) sobek.Value {
+	h.set("ed25519Sign", func(seed, data jsvm.Value) jsvm.Value {
 		s := h.bytes(seed)
 		if len(s) != ed25519.SeedSize {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(ed25519.Sign(ed25519.NewKeyFromSeed(s), h.bytes(data)))
 	})
-	h.set("ed25519Verify", func(pub, sig, data sobek.Value) bool {
+	h.set("ed25519Verify", func(pub, sig, data jsvm.Value) bool {
 		p := h.bytes(pub)
 		return len(p) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(p), h.bytes(data), h.bytes(sig))
 	})
-	h.set("ed25519Pkcs8", func(seed sobek.Value) sobek.Value {
+	h.set("ed25519Pkcs8", func(seed jsvm.Value) jsvm.Value {
 		s := h.bytes(seed)
 		if len(s) != ed25519.SeedSize {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKCS8PrivateKey(ed25519.NewKeyFromSeed(s))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("ed25519Spki", func(pub sobek.Value) sobek.Value {
+	h.set("ed25519Spki", func(pub jsvm.Value) jsvm.Value {
 		p := h.bytes(pub)
 		if len(p) != ed25519.PublicKeySize {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKIXPublicKey(ed25519.PublicKey(p))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("ed25519SeedFromPkcs8", func(der sobek.Value) sobek.Value {
+	h.set("ed25519SeedFromPkcs8", func(der jsvm.Value) jsvm.Value {
 		k, err := x509.ParsePKCS8PrivateKey(h.bytes(der))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		ed, ok := k.(ed25519.PrivateKey)
 		if !ok {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(ed.Seed())
 	})
-	h.set("ed25519PubFromSpki", func(der sobek.Value) sobek.Value {
+	h.set("ed25519PubFromSpki", func(der jsvm.Value) jsvm.Value {
 		k, err := x509.ParsePKIXPublicKey(h.bytes(der))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		ed, ok := k.(ed25519.PublicKey)
 		if !ok {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer([]byte(ed))
 	})
@@ -224,43 +224,43 @@ func (h *host) installCrypto() {
 	// a private key, spki for a public one); signatures are the WebCrypto IEEE
 	// P1363 fixed-length r||s form, not ASN.1. jwk coordinates travel as the
 	// uncompressed EC point (0x04||X||Y) and the private scalar d.
-	h.set("ecdsaGenerate", func(curve string) sobek.Value {
+	h.set("ecdsaGenerate", func(curve string) jsvm.Value {
 		c := ecCurve(curve)
 		if c == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		priv, err := ecdsa.GenerateKey(c, rand.Reader)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKCS8PrivateKey(priv)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("ecdsaToSpki", func(pkcs8 sobek.Value) sobek.Value {
+	h.set("ecdsaToSpki", func(pkcs8 jsvm.Value) jsvm.Value {
 		priv := parseECPriv(h.bytes(pkcs8))
 		if priv == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("ecdsaSign", func(pkcs8 sobek.Value, hashAlg string, data sobek.Value) sobek.Value {
+	h.set("ecdsaSign", func(pkcs8 jsvm.Value, hashAlg string, data jsvm.Value) jsvm.Value {
 		priv := parseECPriv(h.bytes(pkcs8))
 		newHash := hashFor(hashAlg)
 		if priv == nil || newHash == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		hh := newHash()
 		hh.Write(h.bytes(data))
 		r, s, err := ecdsa.Sign(rand.Reader, priv, hh.Sum(nil))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		n := (priv.Curve.Params().BitSize + 7) / 8
 		sig := make([]byte, 2*n)
@@ -268,7 +268,7 @@ func (h *host) installCrypto() {
 		s.FillBytes(sig[n:])
 		return h.buffer(sig)
 	})
-	h.set("ecdsaVerify", func(spki sobek.Value, hashAlg string, sig, data sobek.Value) bool {
+	h.set("ecdsaVerify", func(spki jsvm.Value, hashAlg string, sig, data jsvm.Value) bool {
 		pub := parseECPub(h.bytes(spki))
 		newHash := hashFor(hashAlg)
 		if pub == nil || newHash == nil {
@@ -283,42 +283,42 @@ func (h *host) installCrypto() {
 		hh.Write(h.bytes(data))
 		return ecdsa.Verify(pub, hh.Sum(nil), new(big.Int).SetBytes(s[:n]), new(big.Int).SetBytes(s[n:]))
 	})
-	h.set("ecdsaPointFromSpki", func(spki sobek.Value) sobek.Value {
+	h.set("ecdsaPointFromSpki", func(spki jsvm.Value) jsvm.Value {
 		pub := parseECPub(h.bytes(spki))
 		if pub == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(elliptic.Marshal(pub.Curve, pub.X, pub.Y))
 	})
-	h.set("ecdsaSpkiFromPoint", func(curve string, point sobek.Value) sobek.Value {
+	h.set("ecdsaSpkiFromPoint", func(curve string, point jsvm.Value) jsvm.Value {
 		c := ecCurve(curve)
 		if c == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		x, y := elliptic.Unmarshal(c, h.bytes(point))
 		if x == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKIXPublicKey(&ecdsa.PublicKey{Curve: c, X: x, Y: y})
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("ecdsaDFromPkcs8", func(pkcs8 sobek.Value) sobek.Value {
+	h.set("ecdsaDFromPkcs8", func(pkcs8 jsvm.Value) jsvm.Value {
 		priv := parseECPriv(h.bytes(pkcs8))
 		if priv == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		n := (priv.Curve.Params().BitSize + 7) / 8
 		d := make([]byte, n)
 		priv.D.FillBytes(d)
 		return h.buffer(d)
 	})
-	h.set("ecdsaPkcs8FromD", func(curve string, d sobek.Value) sobek.Value {
+	h.set("ecdsaPkcs8FromD", func(curve string, d jsvm.Value) jsvm.Value {
 		c := ecCurve(curve)
 		if c == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		db := h.bytes(d)
 		priv := new(ecdsa.PrivateKey)
@@ -327,11 +327,11 @@ func (h *host) installCrypto() {
 		priv.X, priv.Y = c.ScalarBaseMult(db)
 		der, err := x509.MarshalPKCS8PrivateKey(priv)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("ecdsaCurve", func(der sobek.Value, private bool) string {
+	h.set("ecdsaCurve", func(der jsvm.Value, private bool) string {
 		if private {
 			if priv := parseECPriv(h.bytes(der)); priv != nil {
 				return curveName(priv.Curve)
@@ -343,110 +343,110 @@ func (h *host) installCrypto() {
 		}
 		return ""
 	})
-	h.set("ecdhBits", func(privPkcs8, pubSpki sobek.Value, bits int) sobek.Value {
+	h.set("ecdhBits", func(privPkcs8, pubSpki jsvm.Value, bits int) jsvm.Value {
 		priv, pub := parseECPriv(h.bytes(privPkcs8)), parseECPub(h.bytes(pubSpki))
 		if priv == nil || pub == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		pe, err := priv.ECDH()
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		qe, err := pub.ECDH()
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		secret, err := pe.ECDH(qe) // the shared secret is the X coordinate
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		if bits < 0 { // a null length derives the whole secret
 			return h.buffer(secret)
 		}
 		if bits/8 > len(secret) {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(secret[:bits/8])
 	})
 
 	// X25519 (ECDH over Curve25519): keys are the raw 32-byte scalar (private)
 	// or public key, like Ed25519 but via crypto/ecdh.
-	h.set("x25519Generate", func() sobek.Value {
+	h.set("x25519Generate", func() jsvm.Value {
 		priv, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(priv.Bytes())
 	})
-	h.set("x25519Public", func(priv sobek.Value) sobek.Value {
+	h.set("x25519Public", func(priv jsvm.Value) jsvm.Value {
 		k, err := ecdh.X25519().NewPrivateKey(h.bytes(priv))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(k.PublicKey().Bytes())
 	})
-	h.set("x25519Bits", func(priv, pub sobek.Value, bits int) sobek.Value {
+	h.set("x25519Bits", func(priv, pub jsvm.Value, bits int) jsvm.Value {
 		pk, err := ecdh.X25519().NewPrivateKey(h.bytes(priv))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		qk, err := ecdh.X25519().NewPublicKey(h.bytes(pub))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		secret, err := pk.ECDH(qk)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		if bits < 0 {
 			return h.buffer(secret)
 		}
 		if bits/8 > len(secret) {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(secret[:bits/8])
 	})
-	h.set("x25519Pkcs8", func(priv sobek.Value) sobek.Value {
+	h.set("x25519Pkcs8", func(priv jsvm.Value) jsvm.Value {
 		k, err := ecdh.X25519().NewPrivateKey(h.bytes(priv))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKCS8PrivateKey(k)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("x25519Spki", func(pub sobek.Value) sobek.Value {
+	h.set("x25519Spki", func(pub jsvm.Value) jsvm.Value {
 		k, err := ecdh.X25519().NewPublicKey(h.bytes(pub))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKIXPublicKey(k)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("x25519PrivFromPkcs8", func(der sobek.Value) sobek.Value {
+	h.set("x25519PrivFromPkcs8", func(der jsvm.Value) jsvm.Value {
 		k, err := x509.ParsePKCS8PrivateKey(h.bytes(der))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		pk, ok := k.(*ecdh.PrivateKey)
 		if !ok || pk.Curve() != ecdh.X25519() {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(pk.Bytes())
 	})
-	h.set("x25519PubFromSpki", func(der sobek.Value) sobek.Value {
+	h.set("x25519PubFromSpki", func(der jsvm.Value) jsvm.Value {
 		k, err := x509.ParsePKIXPublicKey(h.bytes(der))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		pk, ok := k.(*ecdh.PublicKey)
 		if !ok || pk.Curve() != ecdh.X25519() {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(pk.Bytes())
 	})
@@ -454,37 +454,37 @@ func (h *host) installCrypto() {
 	// RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP): keys are stored by the JS
 	// layer as DER (pkcs8 private, spki public); the hash lives on the JS
 	// key's algorithm. jwk fields travel as base64url strings in an object.
-	h.set("rsaGenerate", func(bits int) sobek.Value {
+	h.set("rsaGenerate", func(bits int) jsvm.Value {
 		if bits < 512 || bits > 16384 {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		priv, err := rsa.GenerateKey(rand.Reader, bits) // Go fixes e = 65537
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKCS8PrivateKey(priv)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("rsaToSpki", func(pkcs8 sobek.Value) sobek.Value {
+	h.set("rsaToSpki", func(pkcs8 jsvm.Value) jsvm.Value {
 		priv := parseRSAPriv(h.bytes(pkcs8))
 		if priv == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})
-	h.set("rsaSign", func(pkcs8 sobek.Value, hashAlg string, pss bool, saltLen int, data sobek.Value) sobek.Value {
+	h.set("rsaSign", func(pkcs8 jsvm.Value, hashAlg string, pss bool, saltLen int, data jsvm.Value) jsvm.Value {
 		priv := parseRSAPriv(h.bytes(pkcs8))
 		ch := cryptoHash(hashAlg)
 		newHash := hashFor(hashAlg)
 		if priv == nil || ch == 0 || newHash == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		hh := newHash()
 		hh.Write(h.bytes(data))
@@ -497,11 +497,11 @@ func (h *host) installCrypto() {
 			sig, err = rsa.SignPKCS1v15(rand.Reader, priv, ch, digest)
 		}
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(sig)
 	})
-	h.set("rsaVerify", func(spki sobek.Value, hashAlg string, pss bool, saltLen int, sig, data sobek.Value) bool {
+	h.set("rsaVerify", func(spki jsvm.Value, hashAlg string, pss bool, saltLen int, sig, data jsvm.Value) bool {
 		pub := parseRSAPub(h.bytes(spki))
 		ch := cryptoHash(hashAlg)
 		newHash := hashFor(hashAlg)
@@ -516,36 +516,36 @@ func (h *host) installCrypto() {
 		}
 		return rsa.VerifyPKCS1v15(pub, ch, digest, h.bytes(sig)) == nil
 	})
-	h.set("rsaOaepEncrypt", func(spki sobek.Value, hashAlg string, label, data sobek.Value) sobek.Value {
+	h.set("rsaOaepEncrypt", func(spki jsvm.Value, hashAlg string, label, data jsvm.Value) jsvm.Value {
 		pub := parseRSAPub(h.bytes(spki))
 		newHash := hashFor(hashAlg)
 		if pub == nil || newHash == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		ct, err := rsa.EncryptOAEP(newHash(), rand.Reader, pub, h.bytes(data), h.bytes(label))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(ct)
 	})
-	h.set("rsaOaepDecrypt", func(pkcs8 sobek.Value, hashAlg string, label, data sobek.Value) sobek.Value {
+	h.set("rsaOaepDecrypt", func(pkcs8 jsvm.Value, hashAlg string, label, data jsvm.Value) jsvm.Value {
 		priv := parseRSAPriv(h.bytes(pkcs8))
 		newHash := hashFor(hashAlg)
 		if priv == nil || newHash == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		pt, err := rsa.DecryptOAEP(newHash(), rand.Reader, priv, h.bytes(data), h.bytes(label))
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(pt)
 	})
-	h.set("rsaJwk", func(der sobek.Value, private bool) sobek.Value {
+	h.set("rsaJwk", func(der jsvm.Value, private bool) jsvm.Value {
 		b64 := func(x *big.Int) string { return base64.RawURLEncoding.EncodeToString(x.Bytes()) }
 		if private {
 			priv := parseRSAPriv(h.bytes(der))
 			if priv == nil || len(priv.Primes) < 2 {
-				return sobek.Null()
+				return jsvm.Null()
 			}
 			priv.Precompute()
 			p, q := priv.Primes[0], priv.Primes[1]
@@ -557,15 +557,15 @@ func (h *host) installCrypto() {
 		}
 		pub := parseRSAPub(h.bytes(der))
 		if pub == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.vm.ToValue(map[string]any{"n": b64(pub.N), "e": b64(big.NewInt(int64(pub.E)))})
 	})
-	h.set("rsaFromJwk", func(jwk sobek.Value, private bool) sobek.Value {
+	h.set("rsaFromJwk", func(jwk jsvm.Value, private bool) jsvm.Value {
 		o := jwk.ToObject(h.vm)
 		field := func(name string) *big.Int {
 			v := o.Get(name)
-			if v == nil || sobek.IsUndefined(v) {
+			if v == nil || jsvm.IsUndefined(v) {
 				return nil
 			}
 			b, err := base64.RawURLEncoding.DecodeString(v.String())
@@ -576,28 +576,28 @@ func (h *host) installCrypto() {
 		}
 		n, e := field("n"), field("e")
 		if n == nil || e == nil || !e.IsInt64() {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		pub := rsa.PublicKey{N: n, E: int(e.Int64())}
 		if !private {
 			der, err := x509.MarshalPKIXPublicKey(&pub)
 			if err != nil {
-				return sobek.Null()
+				return jsvm.Null()
 			}
 			return h.buffer(der)
 		}
 		d, p, q := field("d"), field("p"), field("q")
 		if d == nil || p == nil || q == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		priv := &rsa.PrivateKey{PublicKey: pub, D: d, Primes: []*big.Int{p, q}}
 		if err := priv.Validate(); err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		priv.Precompute()
 		der, err := x509.MarshalPKCS8PrivateKey(priv)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.buffer(der)
 	})

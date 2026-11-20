@@ -11,9 +11,7 @@ import (
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/moriyoshi/oganesson/internal/gojatarget"
 	"github.com/moriyoshi/oganesson/internal/jshost"
-	"github.com/moriyoshi/oganesson/internal/licenses"
 	"github.com/moriyoshi/oganesson/runtime/kv"
 	"github.com/moriyoshi/oganesson/runtime/natives"
 	"github.com/moriyoshi/oganesson/runtime/nodeshim"
@@ -108,7 +106,7 @@ func buildServerProgram(dir string, pkg packageJSON, prog *ServerProgram, result
 			return nil, err
 		}
 	}
-	js, err := bundleProgram(dir, prog.File, prog.Args, pkg.DevDependencies, opts.licenses)
+	js, err := bundleProgram(dir, prog.File, prog.Args, pkg.DevDependencies, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +127,7 @@ var programProbe = programProbeKey{}
 // top-level await (the template awaits fs reads and imports), so the
 // bundle is ESM run inside an async function; the glue, evaluated first,
 // gives the runtime its handler before the program's first await.
-func bundleProgram(dir, file string, args []string, devDependencies map[string]string, col *licenses.Collector) (string, error) {
+func bundleProgram(dir, file string, args []string, devDependencies map[string]string, config Options) (string, error) {
 	nativePlugin, err := nativegen.Plugin(dir)
 	if err != nil {
 		return "", err
@@ -241,7 +239,7 @@ globalThis.__ogHandler = (request) => serve(request, globalThis.__ogProgram);
 		}, natives.Plugin(), nativePlugin, nodeshim.Plugin(nodeshim.Options{ResolveDir: dir}), kv.Plugin()},
 		Define: map[string]string{"process.env.NODE_ENV": `"production"`},
 	}
-	gojatarget.Apply(&opts)
+	config.ServerBackend.Apply(&opts)
 	opts.Format = api.FormatESModule
 	opts.Platform = api.PlatformNeutral
 	opts.MainFields = []string{"module", "main"}
@@ -254,9 +252,9 @@ globalThis.__ogHandler = (request) => serve(request, globalThis.__ogProgram);
 	opts.Supported["top-level-await"] = true
 	res := api.Build(opts)
 	if len(res.Errors) > 0 {
-		return "", fmt.Errorf("vite: bundling the server program for Goja:\n%s", formatMessages(res.Errors))
+		return "", fmt.Errorf("vite: bundling the server program:\n%s", formatMessages(res.Errors))
 	}
-	if err := col.AddMetafile(res.Metafile, dir); err != nil {
+	if err := config.licenses.AddMetafile(res.Metafile, dir); err != nil {
 		return "", err
 	}
 	// esbuild's __require fallback, reached by computed import() and
@@ -266,7 +264,7 @@ globalThis.__ogHandler = (request) => serve(request, globalThis.__ogProgram);
     if (og$m) return og$m;
     `+dynamicRequireThrow, 1)
 	code = "globalThis.__ogProgram = (async () => {\n" + code + "\n})();\n"
-	return gojatarget.Finish(code), nil
+	return config.ServerBackend.Finish(code), nil
 }
 
 // dynamicRequireThrow ends esbuild's __require helper: a require (or a

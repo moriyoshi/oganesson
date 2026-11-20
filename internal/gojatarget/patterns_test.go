@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // TestHoistDefaultedArrayPatterns runs, after Finish, patterns the engine's
@@ -31,7 +31,7 @@ func TestHoistDefaultedArrayPatterns(t *testing.T) {
 		{"earlier param", `function f(x, { p: [a = x] = [] } = {}) { return a; } String(f(42))`, "42"},
 	} {
 		code := Finish(c.src)
-		v, err := sobek.New().RunString(code)
+		v, err := jsvm.New().RunString(code)
 		if err != nil || v.String() != c.want {
 			t.Errorf("%s: got %v, %v, want %s\n%s", c.name, v, err, c.want, code)
 		}
@@ -46,7 +46,7 @@ func TestHoistDefaultedArrayPatterns(t *testing.T) {
 			t.Errorf("rewrote %s\nto %s", src, got)
 		}
 	}
-	if got := Finish(`var { p: [a = 1] = [] } = {};`); !strings.Contains(got, "__og_dp0") {
+	if got := HoistDefaultedArrayPatterns(`var { p: [a = 1] = [] } = {};`); !strings.Contains(got, "__og_dp0") {
 		t.Errorf("not rewritten: %s", got)
 	}
 }

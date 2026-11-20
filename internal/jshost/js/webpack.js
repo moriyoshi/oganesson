@@ -97,7 +97,12 @@ function runLoader(loader, ctx, content, map, meta) {
     if (!loader.raw && typeof input !== "string") input = Buffer.from(input).toString("utf8");
     try {
       const r = loader.fn.call(context, input, map, meta);
-      if (isAsync) return;
+      if (isAsync) {
+        // A loader can select the callback protocol and then throw from
+        // its async function before it reaches that callback.
+        if (r && typeof r.then === "function") r.then(undefined, callback);
+        return;
+      }
       if (r && typeof r.then === "function") r.then((v) => callback(null, v), callback);
       else callback(null, r);
     } catch (e) {

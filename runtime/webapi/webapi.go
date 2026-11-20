@@ -3,28 +3,24 @@
 // FormData, Headers/Request/Response, fetch, crypto, structuredClone and the
 // built-in polyfills Goja lacks.
 //
-// The JS half lives in js/src (TypeScript) and is bundled into prelude.js by
-// `go generate`. The Go half registers primitives on the engine's host object.
+// The JS half lives in js/src (TypeScript). Go generate bundles a prelude for
+// each engine. The Go half registers primitives on the engine's host object.
 package webapi
 
 //go:generate go run ./internal/genemoji
 //go:generate go run ./internal/genprelude
 
 import (
-	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
-//go:embed prelude.js
-var preludeSource string
-
-var preludeProgram = sobek.MustCompile("og:prelude", preludeSource, true)
+var preludeProgram = jsvm.MustCompile("og:prelude", preludeSource, true)
 
 // Options configure the installed APIs.
 type Options struct {
@@ -45,7 +41,7 @@ type Options struct {
 type Runtime struct {
 	h *host
 	// exports holds JS helpers the prelude hands back to Go.
-	exports *sobek.Object
+	exports *jsvm.Object
 }
 
 // Install registers the host primitives and runs the prelude. It must be
@@ -70,21 +66,23 @@ func Install(e *engine.Engine, opts Options) (*Runtime, error) {
 	h.installCrypto()
 	h.installFetch()
 	h.installEnv()
-	h.installCollator()
-	h.installStringProperties()
-	h.set("abDetach", func(b sobek.ArrayBuffer) bool { return b.Detach() })
-	h.set("abDetached", func(b sobek.ArrayBuffer) bool { return b.Detached() })
+	if !jsvm.UsesEkuma {
+		h.installCollator()
+		h.installStringProperties()
+	}
+	h.set("abDetach", func(b jsvm.ArrayBuffer) bool { return b.Detach() })
+	h.set("abDetached", func(b jsvm.ArrayBuffer) bool { return b.Detached() })
 	h.set("baseURL", opts.BaseURL)
 
 	v, err := e.VM.RunProgram(preludeProgram)
 	if err != nil {
 		return nil, fmt.Errorf("webapi: prelude: %w", err)
 	}
-	install, ok := sobek.AssertFunction(v)
+	install, ok := jsvm.AssertFunction(v)
 	if !ok {
 		return nil, fmt.Errorf("webapi: prelude did not evaluate to a function")
 	}
-	exports, err := install(sobek.Undefined(), e.Host)
+	exports, err := install(jsvm.Undefined(), e.Host)
 	if err != nil {
 		return nil, fmt.Errorf("webapi: prelude install: %w", err)
 	}
@@ -93,7 +91,7 @@ func Install(e *engine.Engine, opts Options) (*Runtime, error) {
 
 type host struct {
 	e    *engine.Engine
-	vm   *sobek.Runtime
+	vm   *jsvm.Runtime
 	opts Options
 	st   *bodyState
 }
@@ -106,14 +104,14 @@ func (h *host) set(name string, v any) {
 
 // bytes returns a copy of a BufferSource-like value's bytes. The JS side
 // normalizes inputs to Uint8Array before calling into Go.
-func (h *host) bytes(v sobek.Value) []byte {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (h *host) bytes(v jsvm.Value) []byte {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return nil
 	}
 	switch b := v.Export().(type) {
 	case []byte:
 		return append([]byte(nil), b...)
-	case sobek.ArrayBuffer:
+	case jsvm.ArrayBuffer:
 		return append([]byte(nil), b.Bytes()...)
 	case string:
 		return []byte(b)
@@ -122,7 +120,7 @@ func (h *host) bytes(v sobek.Value) []byte {
 }
 
 // buffer converts Go bytes into a fresh ArrayBuffer.
-func (h *host) buffer(b []byte) sobek.Value {
+func (h *host) buffer(b []byte) jsvm.Value {
 	return h.vm.ToValue(h.vm.NewArrayBuffer(b))
 }
 

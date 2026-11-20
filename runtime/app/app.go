@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/internal/wasm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"github.com/moriyoshi/oganesson/runtime/imageopt"
@@ -147,7 +147,7 @@ func handler(fsys fs.FS, logger *slog.Logger, console io.Writer) (http.Handler, 
 	if err != nil {
 		return nil, nil, err
 	}
-	prog, err := sobek.Compile(ServerFile, string(src), false)
+	prog, err := jsvm.Compile(ServerFile, string(src), false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("app: compiling %s: %w", ServerFile, err)
 	}
@@ -264,11 +264,11 @@ func handler(fsys fs.FS, logger *slog.Logger, console io.Writer) (http.Handler, 
 func startupOutputOnce(shown *atomic.Bool) func(*engine.Engine) error {
 	return func(e *engine.Engine) error {
 		quiet := shown.Swap(true)
-		write, _ := sobek.AssertFunction(e.Host.Get("write"))
+		write, _ := jsvm.AssertFunction(e.Host.Get("write"))
 		if quiet && write != nil {
-			if err := e.Host.Set("write", func(fc sobek.FunctionCall) sobek.Value {
+			if err := e.Host.Set("write", func(fc jsvm.FunctionCall) jsvm.Value {
 				if quiet {
-					return sobek.Undefined()
+					return jsvm.Undefined()
 				}
 				v, err := write(fc.This, fc.Arguments...)
 				if err != nil {
@@ -283,8 +283,8 @@ func startupOutputOnce(shown *atomic.Bool) func(*engine.Engine) error {
 		if err != nil {
 			return err
 		}
-		fn, _ := sobek.AssertFunction(install)
-		_, err = fn(sobek.Undefined(), e.VM.ToValue(func() { quiet = false }))
+		fn, _ := jsvm.AssertFunction(install)
+		_, err = fn(jsvm.Undefined(), e.VM.ToValue(func() { quiet = false }))
 		return err
 	}
 }

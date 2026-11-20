@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // testModule hand-assembles:
@@ -50,9 +50,9 @@ func testModule() []byte {
 	return out.Bytes()
 }
 
-func newVM(t *testing.T) *sobek.Runtime {
+func newVM(t *testing.T) *jsvm.Runtime {
 	t.Helper()
-	vm := sobek.New()
+	vm := jsvm.New()
 	rt, err := Install(vm, Options{Stderr: io.Discard})
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestWebAssemblyErrors(t *testing.T) {
 // withholds WASI and the native imports, and creates no wazero runtime
 // until WebAssembly is used.
 func TestRestricted(t *testing.T) {
-	vm := sobek.New()
+	vm := jsvm.New()
 	rt, err := Install(vm, Options{Stderr: io.Discard, Restricted: true})
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestExportedGlobals(t *testing.T) {
 		writeU32(&exp, uint32(i))
 	}
 	writeSection(&out, secExport, exp.Bytes())
-	vm := sobek.New()
+	vm := jsvm.New()
 	rt, err := Install(vm, Options{Stderr: io.Discard})
 	if err != nil {
 		t.Fatal(err)

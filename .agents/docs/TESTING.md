@@ -56,6 +56,8 @@ Run everything:
 go test -tags nodynamic -timeout 30m ./cmd/... ./runtime/... ./internal/... ./pack/...
 ```
 
+Use `-tags nodynamic,ekuma` to run the same suites on the experimental Ekuma backend.
+
 `spikes/` contains throwaway experiments and is not part of the suite.
 
 ## Fixtures
@@ -105,7 +107,7 @@ Then drive `http://localhost:3123/` with the Playwright MCP tools. Check for con
 
 `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests. It runs lint and tests on Linux only and builds no binaries:
 
-- `lint`: gofmt, `go vet`, and the freshness of the two checked-in generated files: `prelude.js` (genprelude) and `runtime/notices/THIRD_PARTY_NOTICES.txt` (`go generate ./runtime/notices`).
+- `lint`: gofmt, `go vet`, and freshness checks for the Sobek and Ekuma preludes (`prelude.js` and `prelude-ekuma.js`) and `runtime/notices/THIRD_PARTY_NOTICES.txt`.
 - `test`: shards `core` (everything outside `internal/frameworks`, with WPT), `next`, and `vite`. Fixtures are installed with `scripts/install-fixtures.sh` and cached weekly. The job summary lists every skipped test.
 
 `.github/workflows/release.yml` runs on `v*` tags: it calls CI and, only after its `lint` and `test` jobs pass, builds an archive per platform (linux, darwin and windows on amd64 and arm64: og, LICENSE, README.md, and the checked-in THIRD_PARTY_NOTICES.txt) and publishes a GitHub release with `SHA256SUMS`.

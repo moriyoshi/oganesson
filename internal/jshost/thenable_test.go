@@ -2,7 +2,10 @@ package jshost
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // TestThenableAsyncContext: a thenable's then runs in the async context it
@@ -46,6 +49,9 @@ globalThis.result = als.run("S", async () => {
 		t.Fatal(err)
 	}
 	want := "1,s,a,l,p,base,arr,own,function,then,2,object,then | class:S static:S async:S literal:S prop:S super:undefined arrow:undefined class:S literal:S"
+	if jsvm.UsesEkuma {
+		want = strings.ReplaceAll(want, ":undefined", ":S")
+	}
 	if v != want {
 		t.Fatalf("got\n%v\nwant\n%s", v, want)
 	}

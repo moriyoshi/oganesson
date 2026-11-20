@@ -42,7 +42,7 @@ func TestBundleProgram(t *testing.T) {
 	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code, err := bundleProgram(dir, file, nil, nil, nil)
+	code, err := bundleProgram(dir, file, nil, nil, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestBundleServerConditions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	code, err := bundleServer(dir, filepath.Join(dir, "dist/server/entry.js"), nil)
+	code, err := bundleServer(dir, filepath.Join(dir, "dist/server/entry.js"), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

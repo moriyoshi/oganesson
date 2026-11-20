@@ -11,8 +11,8 @@ import (
 	"sync"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
 	"github.com/microsoft/TypeScript/tsc/ogapi"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/internal/licenses"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
@@ -165,15 +165,15 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 	h := &rolldownHost{e: e, builds: map[int64]api.PluginBuild{}, licenses: col}
 	vm := e.VM
 	o := vm.NewObject()
-	_ = o.Set("build", func(specJSON string, hooks *sobek.Object) sobek.Value {
+	_ = o.Set("build", func(specJSON string, hooks *jsvm.Object) jsvm.Value {
 		promise, resolve, reject := vm.NewPromise()
 		var spec buildSpec
 		if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 			_ = reject(vm.NewGoError(err))
 			return vm.ToValue(promise)
 		}
-		resolveHook, _ := sobek.AssertFunction(hooks.Get("resolve"))
-		loadHook, _ := sobek.AssertFunction(hooks.Get("load"))
+		resolveHook, _ := jsvm.AssertFunction(hooks.Get("resolve"))
+		loadHook, _ := jsvm.AssertFunction(hooks.Get("load"))
 		h.mu.Lock()
 		h.nextID++
 		id := h.nextID
@@ -189,7 +189,7 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 			h.mu.Lock()
 			delete(h.builds, id)
 			h.mu.Unlock()
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				if len(res.Errors) > 0 {
 					return reject(vm.NewGoError(fmt.Errorf("%s", formatMessages(res.Errors))))
 				}
@@ -208,7 +208,7 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 	// resolver, inside the build buildId, or (outside one: plugins resolving
 	// in buildStart, Astro's) a standalone resolver with optsJSON's
 	// platform, conditions, main fields and extensions.
-	_ = o.Set("resolve", func(buildID int64, source, resolveDir, kind, optsJSON string) sobek.Value {
+	_ = o.Set("resolve", func(buildID int64, source, resolveDir, kind, optsJSON string) jsvm.Value {
 		promise, resolve, reject := vm.NewPromise()
 		h.mu.Lock()
 		pb, ok := h.builds[buildID]
@@ -227,9 +227,9 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 		complete := e.Loop.Async()
 		go func() {
 			r := pb.Resolve(source, api.ResolveOptions{ResolveDir: resolveDir, Kind: k, PluginData: defaultResolve})
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				if len(r.Errors) > 0 {
-					return resolve(sobek.Null())
+					return resolve(jsvm.Null())
 				}
 				return resolve(vm.ToValue(map[string]any{"path": r.Path, "external": r.External, "sideEffects": r.SideEffects}))
 			})
@@ -253,7 +253,7 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 	// transform, and rolldown/utils' transform and minify). The nearest
 	// tsconfig.json gives the TypeScript settings (decorators, class
 	// fields, JSX). With withMap, the result is { code, map }.
-	_ = o.Set("transform", func(code string, optsJSON string) sobek.Value {
+	_ = o.Set("transform", func(code string, optsJSON string) jsvm.Value {
 		var o struct {
 			Loader       string            `json:"loader"`
 			Sourcefile   string            `json:"sourcefile"`
@@ -304,12 +304,12 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 	})
 	// preview(root, clientDir, serverEntry, env): the built app served on a
 	// local port (preview.go) -> { id, url }; closePreview(id).
-	_ = o.Set("preview", func(root, clientDir, serverEntry string, env map[string]string) sobek.Value {
+	_ = o.Set("preview", func(root, clientDir, serverEntry string, env map[string]string) jsvm.Value {
 		promise, resolve, reject := vm.NewPromise()
 		complete := e.Loop.Async()
 		go func() {
 			id, url, err := startPreview(root, clientDir, serverEntry, env)
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				if err != nil {
 					return reject(vm.NewGoError(err))
 				}
@@ -320,12 +320,12 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 	})
 	// programPreview(root): the project served through its server program
 	// (preview.go) -> { id, url }.
-	_ = o.Set("programPreview", func(root string) sobek.Value {
+	_ = o.Set("programPreview", func(root string) jsvm.Value {
 		promise, resolve, reject := vm.NewPromise()
 		complete := e.Loop.Async()
 		go func() {
 			id, url, err := startProgramPreview(root)
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				if err != nil {
 					return reject(vm.NewGoError(err))
 				}
@@ -339,8 +339,8 @@ func installRolldown(e *engine.Engine, col *licenses.Collector) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), o)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), o)
 	return err
 }
 
@@ -555,7 +555,7 @@ func bannerFor(js string) map[string]string {
 	return map[string]string{"js": js}
 }
 
-func (h *rolldownHost) run(id int64, spec buildSpec, resolveHook, loadHook sobek.Callable) api.BuildResult {
+func (h *rolldownHost) run(id int64, spec buildSpec, resolveHook, loadHook jsvm.Callable) api.BuildResult {
 	define, stmts := globalDefines(spec.Define)
 	plugin := api.Plugin{
 		Name: "og-rolldown",
@@ -676,33 +676,33 @@ func (h *rolldownHost) run(id int64, spec buildSpec, resolveHook, loadHook sobek
 
 // call runs a JS hook on the engine's loop from an esbuild goroutine and
 // waits for its (possibly asynchronous) result, as plain data.
-func (h *rolldownHost) call(fn sobek.Callable, arg any) (any, error) {
+func (h *rolldownHost) call(fn jsvm.Callable, arg any) (any, error) {
 	type result struct {
 		v   any
 		err error
 	}
 	ch := make(chan result, 1)
-	h.e.Loop.Post(func(vm *sobek.Runtime) error {
-		v, err := fn(sobek.Undefined(), vm.ToValue(arg))
+	h.e.Loop.Post(func(vm *jsvm.Runtime) error {
+		v, err := fn(jsvm.Undefined(), vm.ToValue(arg))
 		if err != nil {
 			ch <- result{err: err}
 			return nil
 		}
-		settle := func(v sobek.Value) {
-			if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+		settle := func(v jsvm.Value) {
+			if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 				ch <- result{}
 				return
 			}
 			var out any
 			ch <- result{v: out, err: vm.ExportTo(v, &out)}
 		}
-		if p, ok := v.Export().(*sobek.Promise); ok {
-			then, _ := sobek.AssertFunction(vm.ToValue(p).ToObject(vm).Get("then"))
+		if p, ok := jsvm.AsPromise(v); ok {
+			then, _ := jsvm.AssertFunction(vm.ToValue(p).ToObject(vm).Get("then"))
 			_, err := then(vm.ToValue(p),
-				vm.ToValue(func(c sobek.FunctionCall) sobek.Value { settle(c.Argument(0)); return sobek.Undefined() }),
-				vm.ToValue(func(c sobek.FunctionCall) sobek.Value {
+				vm.ToValue(func(c jsvm.FunctionCall) jsvm.Value { settle(c.Argument(0)); return jsvm.Undefined() }),
+				vm.ToValue(func(c jsvm.FunctionCall) jsvm.Value {
 					ch <- result{err: fmt.Errorf("%s", errorText(c.Argument(0)))}
-					return sobek.Undefined()
+					return jsvm.Undefined()
 				}))
 			if err != nil {
 				ch <- result{err: err}
@@ -716,9 +716,9 @@ func (h *rolldownHost) call(fn sobek.Callable, arg any) (any, error) {
 	return r.v, r.err
 }
 
-func errorText(v sobek.Value) string {
-	if o, ok := v.(*sobek.Object); ok {
-		if st := o.Get("stack"); st != nil && !sobek.IsUndefined(st) {
+func errorText(v jsvm.Value) string {
+	if o, ok := v.(*jsvm.Object); ok {
+		if st := o.Get("stack"); st != nil && !jsvm.IsUndefined(st) {
 			return st.String()
 		}
 	}

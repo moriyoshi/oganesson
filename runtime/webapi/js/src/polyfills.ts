@@ -261,7 +261,7 @@ export function installPolyfills() {
   const S = Symbol as any;
   if (!S.dispose) Object.defineProperty(Symbol, "dispose", { value: Symbol("Symbol.dispose") });
   if (!S.asyncDispose) Object.defineProperty(Symbol, "asyncDispose", { value: Symbol("Symbol.asyncDispose") });
-  installProxyHasInstance();
+  if (!__ogNativeBuiltins) installProxyHasInstance();
 }
 
 // The engine's instanceof rejects a callable Proxy on its right ("Expecting

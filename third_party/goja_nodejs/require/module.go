@@ -12,8 +12,7 @@ import (
 	"syscall"
 	"text/template"
 
-	js "github.com/grafana/sobek"
-	"github.com/grafana/sobek/parser"
+	js "github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 type ModuleLoader func(*js.Runtime, *js.Object)
@@ -195,11 +194,7 @@ func (r *Registry) getCompiledSource(p string) (*js.Program, error) {
 		}
 
 		source := "(function(exports,require,module,__filename,__dirname){" + s + "\n})"
-		parsed, err := js.Parse(p, source, parser.WithSourceMapLoader(r.srcLoader))
-		if err != nil {
-			return nil, err
-		}
-		prg, err = js.CompileAST(parsed, false)
+		prg, err = js.CompileCommonJS(p, source, r.srcLoader)
 		if err == nil {
 			if r.compiled == nil {
 				r.compiled = make(map[string]*js.Program)

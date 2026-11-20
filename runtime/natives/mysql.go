@@ -16,7 +16,7 @@ import (
 	"time"
 
 	driver "github.com/go-sql-driver/mysql"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -129,7 +129,7 @@ type rowOptions struct {
 	supportBigNumbers bool
 	bigNumberStrings  bool
 	timezone          *time.Location // interprets DATE/DATETIME/TIMESTAMP wall-clocks; nil = UTC
-	typeCast          sobek.Callable // mysql2 typeCast(field, next) callback, or nil
+	typeCast          jsvm.Callable  // mysql2 typeCast(field, next) callback, or nil
 	typeCastRaw       bool           // typeCast: false -> every column as a raw Buffer
 }
 
@@ -264,7 +264,7 @@ func runMySQL(ctx context.Context, q execQuerier, stmt string, args []any) (*myR
 // connection, or a transaction) are kept by an integer handle.
 type myBinding struct {
 	e     *engine.Engine
-	vm    *sobek.Runtime
+	vm    *jsvm.Runtime
 	svc   *MySQL
 	ctx   context.Context
 	conns map[int64]*sql.Conn
@@ -276,7 +276,7 @@ type myBinding struct {
 // error they expect. sqlMessage (the server message without the "Error NNNN"
 // prefix) is also set: mysql2 carries it, and @prisma/adapter-mariadb's
 // isDriverError predicate requires errno + sqlMessage + sqlState together.
-func (b *myBinding) jsError(err error) sobek.Value {
+func (b *myBinding) jsError(err error) jsvm.Value {
 	o := b.vm.NewGoError(err)
 	var myErr *driver.MySQLError
 	if errors.As(err, &myErr) {
@@ -311,8 +311,8 @@ func mysqlCodeName(n uint16) string {
 	return "ER_" + strconv.FormatUint(uint64(n), 10)
 }
 
-func (b *myBinding) params(v sobek.Value) []any {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (b *myBinding) params(v jsvm.Value) []any {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return nil
 	}
 	o := v.ToObject(b.vm)
@@ -324,8 +324,8 @@ func (b *myBinding) params(v sobek.Value) []any {
 	return out
 }
 
-func (b *myBinding) toGo(v sobek.Value) any {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (b *myBinding) toGo(v jsvm.Value) any {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return nil
 	}
 	switch x := v.Export().(type) {
@@ -339,7 +339,7 @@ func (b *myBinding) toGo(v sobek.Value) any {
 		return x
 	case []byte:
 		return append([]byte(nil), x...)
-	case sobek.ArrayBuffer:
+	case jsvm.ArrayBuffer:
 		return append([]byte(nil), x.Bytes()...)
 	case time.Time:
 		return x
@@ -424,7 +424,7 @@ func mysqlDateString(dbType string, t time.Time) string {
 // shape builds the host result: a ResultSetHeader for a write, or positional
 // rows + fields for a SELECT (the shim builds mysql2's object rows, or Drizzle's
 // rowsAsArray rows, in JS). Runs on the loop.
-func (b *myBinding) shape(res *myResult) sobek.Value {
+func (b *myBinding) shape(res *myResult) jsvm.Value {
 	vm := b.vm
 	o := vm.NewObject()
 	_ = o.Set("isSelect", res.isSelect)
@@ -548,10 +548,10 @@ func fieldString(dbType string, v any) string {
 
 // jsBuffer wraps bytes as a Node Buffer when the shim installs one, else a
 // Uint8Array (via an ArrayBuffer).
-func (b *myBinding) jsBuffer(data []byte) sobek.Value {
+func (b *myBinding) jsBuffer(data []byte) jsvm.Value {
 	ab := b.vm.NewArrayBuffer(data)
-	if ctor := b.vm.Get("Buffer"); ctor != nil && !sobek.IsUndefined(ctor) {
-		if from, ok := sobek.AssertFunction(ctor.ToObject(b.vm).Get("from")); ok {
+	if ctor := b.vm.Get("Buffer"); ctor != nil && !jsvm.IsUndefined(ctor) {
+		if from, ok := jsvm.AssertFunction(ctor.ToObject(b.vm).Get("from")); ok {
 			if buf, err := from(ctor, b.vm.ToValue(ab)); err == nil {
 				return buf
 			}
@@ -584,15 +584,15 @@ func (b *myBinding) typeCastCell(f myField, v any, opts rowOptions) any {
 	_ = field.Set("length", f.length)
 	_ = field.Set("db", "")
 	_ = field.Set("table", "")
-	_ = field.Set("string", func(sobek.FunctionCall) sobek.Value {
+	_ = field.Set("string", func(jsvm.FunctionCall) jsvm.Value {
 		if v == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return vm.ToValue(fieldString(f.dbType, v))
 	})
-	_ = field.Set("buffer", func(sobek.FunctionCall) sobek.Value {
+	_ = field.Set("buffer", func(jsvm.FunctionCall) jsvm.Value {
 		if v == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		if bb, ok := v.([]byte); ok {
 			return b.jsBuffer(append([]byte(nil), bb...))
@@ -603,10 +603,10 @@ func (b *myBinding) typeCastCell(f myField, v any, opts rowOptions) any {
 	def := opts
 	def.typeCast = nil
 	def.typeCastRaw = false
-	next := func(sobek.FunctionCall) sobek.Value {
+	next := func(jsvm.FunctionCall) jsvm.Value {
 		return vm.ToValue(b.jsVal(f.dbType, v, def))
 	}
-	out, err := opts.typeCast(sobek.Undefined(), field, vm.ToValue(next))
+	out, err := opts.typeCast(jsvm.Undefined(), field, vm.ToValue(next))
 	if err != nil {
 		panic(err)
 	}
@@ -614,13 +614,13 @@ func (b *myBinding) typeCastCell(f myField, v any, opts rowOptions) any {
 }
 
 // asyncWith runs a query off the loop and settles a JS promise with shape(res).
-func (b *myBinding) asyncWith(shape func(*myResult) sobek.Value, work func() (*myResult, error)) sobek.Value {
+func (b *myBinding) asyncWith(shape func(*myResult) jsvm.Value, work func() (*myResult, error)) jsvm.Value {
 	vm := b.vm
 	promise, resolve, reject := vm.NewPromise()
 	done := b.e.Loop.Async()
 	go func() {
 		res, err := work()
-		done(func(vm *sobek.Runtime) error {
+		done(func(vm *jsvm.Runtime) error {
 			if err != nil {
 				return reject(b.jsError(err))
 			}
@@ -630,11 +630,11 @@ func (b *myBinding) asyncWith(shape func(*myResult) sobek.Value, work func() (*m
 	return vm.ToValue(promise)
 }
 
-func (b *myBinding) async(work func() (*myResult, error)) sobek.Value {
+func (b *myBinding) async(work func() (*myResult, error)) jsvm.Value {
 	return b.asyncWith(b.shape, work)
 }
 
-func (b *myBinding) queryPool(dsn string, max int64, stmt string, params, rowOpts sobek.Value) sobek.Value {
+func (b *myBinding) queryPool(dsn string, max int64, stmt string, params, rowOpts jsvm.Value) jsvm.Value {
 	args := b.params(params)
 	opts := b.parseRowOpts(rowOpts)
 	return b.async(func() (*myResult, error) {
@@ -650,7 +650,7 @@ func (b *myBinding) queryPool(dsn string, max int64, stmt string, params, rowOpt
 	})
 }
 
-func (b *myBinding) acquire(dsn string, max int64) sobek.Value {
+func (b *myBinding) acquire(dsn string, max int64) jsvm.Value {
 	vm := b.vm
 	promise, resolve, reject := vm.NewPromise()
 	done := b.e.Loop.Async()
@@ -660,7 +660,7 @@ func (b *myBinding) acquire(dsn string, max int64) sobek.Value {
 		if err == nil {
 			conn, err = db.Conn(b.ctx)
 		}
-		done(func(vm *sobek.Runtime) error {
+		done(func(vm *jsvm.Runtime) error {
 			if err != nil {
 				return reject(b.jsError(err))
 			}
@@ -673,7 +673,7 @@ func (b *myBinding) acquire(dsn string, max int64) sobek.Value {
 	return vm.ToValue(promise)
 }
 
-func (b *myBinding) queryClient(id int64, stmt string, params, rowOpts sobek.Value) sobek.Value {
+func (b *myBinding) queryClient(id int64, stmt string, params, rowOpts jsvm.Value) jsvm.Value {
 	args := b.params(params)
 	opts := b.parseRowOpts(rowOpts)
 	conn := b.conns[id]
@@ -691,8 +691,8 @@ func (b *myBinding) queryClient(id int64, stmt string, params, rowOpts sobek.Val
 
 // parseRowOpts reads the mysql2 result-formatting options object the shim
 // passes per query ({ dateStrings, supportBigNumbers, bigNumberStrings }).
-func (b *myBinding) parseRowOpts(v sobek.Value) rowOptions {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (b *myBinding) parseRowOpts(v jsvm.Value) rowOptions {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return rowOptions{}
 	}
 	o := v.ToObject(b.vm)
@@ -702,8 +702,8 @@ func (b *myBinding) parseRowOpts(v sobek.Value) rowOptions {
 		bigNumberStrings:  boolOpt(o.Get("bigNumberStrings")),
 		timezone:          parseMySQLTimezone(optString(o.Get("timezone"))),
 	}
-	if tc := o.Get("typeCast"); tc != nil && !sobek.IsUndefined(tc) && !sobek.IsNull(tc) {
-		if fn, ok := sobek.AssertFunction(tc); ok {
+	if tc := o.Get("typeCast"); tc != nil && !jsvm.IsUndefined(tc) && !jsvm.IsNull(tc) {
+		if fn, ok := jsvm.AssertFunction(tc); ok {
 			opts.typeCast = fn
 		} else if b, ok := tc.Export().(bool); ok && !b {
 			opts.typeCastRaw = true // typeCast: false
@@ -713,8 +713,8 @@ func (b *myBinding) parseRowOpts(v sobek.Value) rowOptions {
 }
 
 // optString reads an optional JS string ("" when missing/undefined/null).
-func optString(v sobek.Value) string {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func optString(v jsvm.Value) string {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return ""
 	}
 	return v.String()
@@ -747,14 +747,14 @@ func parseMySQLTimezone(tz string) *time.Location {
 }
 
 // boolOpt reads an optional JS boolean (a missing/undefined/null value is false).
-func boolOpt(v sobek.Value) bool {
-	return v != nil && !sobek.IsUndefined(v) && !sobek.IsNull(v) && v.ToBoolean()
+func boolOpt(v jsvm.Value) bool {
+	return v != nil && !jsvm.IsUndefined(v) && !jsvm.IsNull(v) && v.ToBoolean()
 }
 
 // parseDateStrings reads mysql2's dateStrings option: true (every date column),
 // an array of type names, or absent/false (none).
-func (b *myBinding) parseDateStrings(v sobek.Value) dateStringSet {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (b *myBinding) parseDateStrings(v jsvm.Value) dateStringSet {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return dateStringSet{}
 	}
 	if on, ok := v.Export().(bool); ok {
@@ -881,7 +881,7 @@ func (b *myBinding) mariaVal(dbType string, v any) any {
 // a write carries affectedRows + insertId; a SELECT carries positional rows
 // (mariaVal-converted) and fields exposing name + go-sql-driver dbType + length,
 // from which js/mariadb.js derives the driver's field.type/flags/collation.
-func (b *myBinding) shapeMaria(res *myResult) sobek.Value {
+func (b *myBinding) shapeMaria(res *myResult) jsvm.Value {
 	vm := b.vm
 	o := vm.NewObject()
 	_ = o.Set("isSelect", res.isSelect)
@@ -916,7 +916,7 @@ func (b *myBinding) shapeMaria(res *myResult) sobek.Value {
 }
 
 // queryPoolMaria runs a one-off mariadb-shim query on the shared pool.
-func (b *myBinding) queryPoolMaria(dsn string, max int64, stmt string, params sobek.Value) sobek.Value {
+func (b *myBinding) queryPoolMaria(dsn string, max int64, stmt string, params jsvm.Value) jsvm.Value {
 	args := b.params(params)
 	return b.asyncWith(b.shapeMaria, func() (*myResult, error) {
 		db, err := b.svc.get(dsn, int(max))
@@ -929,7 +929,7 @@ func (b *myBinding) queryPoolMaria(dsn string, max int64, stmt string, params so
 
 // queryClientMaria runs a mariadb-shim query on a pinned connection (a
 // transaction spans one).
-func (b *myBinding) queryClientMaria(id int64, stmt string, params sobek.Value) sobek.Value {
+func (b *myBinding) queryClientMaria(id int64, stmt string, params jsvm.Value) jsvm.Value {
 	args := b.params(params)
 	conn := b.conns[id]
 	return b.asyncWith(b.shapeMaria, func() (*myResult, error) {
@@ -940,7 +940,7 @@ func (b *myBinding) queryClientMaria(id int64, stmt string, params sobek.Value) 
 	})
 }
 
-func installMySQL(e *engine.Engine, svc *MySQL) (*sobek.Object, func()) {
+func installMySQL(e *engine.Engine, svc *MySQL) (*jsvm.Object, func()) {
 	b := &myBinding{e: e, vm: e.VM, svc: svc, ctx: context.Background(), conns: map[int64]*sql.Conn{}}
 	o := e.VM.NewObject()
 	_ = o.Set("queryPool", b.queryPool)

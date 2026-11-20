@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"strings"
 
-	js "github.com/grafana/sobek"
+	js "github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 const NodePrefix = "node:"

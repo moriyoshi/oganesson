@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 const bodyChunkSize = 64 << 10
@@ -46,14 +46,14 @@ func (h *host) installFetch() {
 		}
 	})
 
-	h.set("fetchStart", func(spec *sobek.Object) sobek.Value {
+	h.set("fetchStart", func(spec *jsvm.Object) jsvm.Value {
 		st.nextID++
 		id := st.nextID
 		ctx, cancel := context.WithCancel(context.Background())
 		st.cancels[id] = cancel
 
 		var body io.Reader
-		if b := spec.Get("body"); b != nil && !sobek.IsNull(b) && !sobek.IsUndefined(b) {
+		if b := spec.Get("body"); b != nil && !jsvm.IsNull(b) && !jsvm.IsUndefined(b) {
 			body = bytes.NewReader(h.bytes(b))
 		}
 		req, err := http.NewRequestWithContext(ctx, spec.Get("method").String(), spec.Get("url").String(), body)
@@ -77,7 +77,7 @@ func (h *host) installFetch() {
 		complete := h.e.Loop.Async()
 		go func() {
 			resp, err := h.opts.HTTPClient.Do(req)
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				delete(st.cancels, id)
 				if err != nil {
 					cancel()
@@ -108,18 +108,18 @@ func (h *host) installFetch() {
 		}
 	})
 
-	h.set("bodyRead", func(id int64) sobek.Value {
+	h.set("bodyRead", func(id int64) jsvm.Value {
 		promise, resolve, reject := h.vm.NewPromise()
 		body, ok := st.bodies[id]
 		if !ok {
-			_ = resolve(sobek.Null())
+			_ = resolve(jsvm.Null())
 			return h.vm.ToValue(promise)
 		}
 		complete := h.e.Loop.Async()
 		go func() {
 			buf := make([]byte, bodyChunkSize)
 			n, err := body.Read(buf)
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				if n > 0 {
 					// Deliver data first; a trailing error surfaces on the next read.
 					return resolve(vm.NewArrayBuffer(buf[:n]))
@@ -127,7 +127,7 @@ func (h *host) installFetch() {
 				delete(st.bodies, id)
 				_ = body.Close()
 				if err == io.EOF || err == nil {
-					return resolve(sobek.Null())
+					return resolve(jsvm.Null())
 				}
 				return reject(vm.NewTypeError("network error while reading body: " + err.Error()))
 			})

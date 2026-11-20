@@ -1,7 +1,7 @@
 package webapi
 
 import (
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/codec"
 )
 
@@ -11,7 +11,7 @@ import (
 // Decompression's write returns [output, error message or null]: output
 // decoded before an error (input after the end) is still delivered.
 func (h *host) installCompression() {
-	h.set("compressor", func(format string, decompress bool) sobek.Value {
+	h.set("compressor", func(format string, decompress bool) jsvm.Value {
 		obj := h.vm.NewObject()
 		fail := func(err error) string {
 			return "DecompressionStream: invalid " + format + " data: " + err.Error()
@@ -22,15 +22,15 @@ func (h *host) installCompression() {
 				panic(h.vm.NewTypeError(err.Error()))
 			}
 			h.e.OnClose(d.Stop)
-			_ = obj.Set("write", func(fc sobek.FunctionCall) sobek.Value {
+			_ = obj.Set("write", func(fc jsvm.FunctionCall) jsvm.Value {
 				out, err := d.Feed(h.bytes(fc.Argument(0)))
-				msg := sobek.Null()
+				msg := jsvm.Null()
 				if err != nil {
 					msg = h.vm.ToValue(fail(err))
 				}
 				return h.vm.ToValue([]any{h.buffer(out), msg})
 			})
-			_ = obj.Set("finish", func() sobek.Value {
+			_ = obj.Set("finish", func() jsvm.Value {
 				out, err := d.Close()
 				if err != nil {
 					panic(h.vm.NewTypeError(fail(err)))
@@ -43,8 +43,8 @@ func (h *host) installCompression() {
 		if err != nil {
 			panic(h.vm.NewTypeError(err.Error()))
 		}
-		_ = obj.Set("write", func(fc sobek.FunctionCall) sobek.Value { return h.buffer(c.Write(h.bytes(fc.Argument(0)))) })
-		_ = obj.Set("finish", func() sobek.Value { return h.buffer(c.Close()) })
+		_ = obj.Set("write", func(fc jsvm.FunctionCall) jsvm.Value { return h.buffer(c.Write(h.bytes(fc.Argument(0)))) })
+		_ = obj.Set("finish", func() jsvm.Value { return h.buffer(c.Close()) })
 		return obj
 	})
 }

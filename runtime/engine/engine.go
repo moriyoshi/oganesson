@@ -1,4 +1,4 @@
-// Package engine owns one Goja runtime and its event loop. Oganesson creates a
+// Package engine owns one JavaScript VM and its event loop. Oganesson creates a
 // fresh Engine per request, which keeps requests fully isolated.
 //
 // The engine exposes Go primitives to JS through a host object (passed to the
@@ -10,7 +10,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // Options configure a new Engine.
@@ -25,12 +25,12 @@ type Options struct {
 	UnhandledRejections bool
 }
 
-// Engine is a Goja runtime plus event loop. It is not safe for concurrent use.
+// Engine is a JavaScript VM and its event loop. It is not safe for concurrent use.
 type Engine struct {
-	VM   *sobek.Runtime
+	VM   *jsvm.Runtime
 	Loop *Loop
 	// Host is the private object that carries Go primitives to the prelude.
-	Host *sobek.Object
+	Host *jsvm.Object
 	actx *asyncContext
 
 	closers []func()
@@ -51,18 +51,9 @@ func (e *Engine) Close() {
 
 // New creates an engine with timers and AsyncLocalStorage primitives
 // registered on Host.
-// maxCallStackSize bounds JS call depth per engine.
-const maxCallStackSize = 15000
-
 func New(opts Options) *Engine {
-	vm := sobek.New()
-	// Unbounded recursion throws a RangeError, as in Node (V8 allows about
-	// 11k frames of a simple function), instead of growing the goroutine
-	// stack until Go aborts the process.
-	vm.SetMaxCallStackSize(maxCallStackSize)
-	vm.SetFieldNameMapper(sobek.UncapFieldNameMapper())
-	actx := &asyncContext{}
-	vm.SetAsyncContextTracker(actx)
+	vm := jsvm.New()
+	actx := newAsyncContext(vm)
 	e := &Engine{VM: vm, Loop: newLoop(vm, actx), Host: vm.NewObject(), actx: actx}
 	if opts.Uncaught != nil {
 		e.Loop.uncaught = opts.Uncaught
@@ -72,20 +63,25 @@ func New(opts Options) *Engine {
 	}
 	e.installTimers()
 	_ = e.Host.Set("AsyncLocalStorage", installAsyncLocalStorage(vm, actx))
-	installContextThen(vm, actx)
+	if !jsvm.UsesEkuma {
+		installContextThen(vm, actx)
+	}
 	return e
 }
 
 // Run calls fn on the loop goroutine (the caller's), then drives the event
 // loop until it is idle or ctx ends.
-func (e *Engine) Run(ctx context.Context, fn func(vm *sobek.Runtime) error) error {
+func (e *Engine) Run(ctx context.Context, fn func(vm *jsvm.Runtime) error) error {
 	// Errors from fn itself belong to the caller, not the uncaught handler.
 	var fnErr error
 	if err := e.Loop.call(func() error { fnErr = fn(e.VM); return nil }); err != nil {
 		return err
 	}
 	if fnErr != nil {
-		return stackOverflow(fnErr)
+		if overflow := stackOverflow(fnErr); overflow != nil {
+			return overflow
+		}
+		return fnErr
 	}
 	return e.Loop.run(ctx)
 }
@@ -95,13 +91,13 @@ func (e *Engine) Run(ctx context.Context, fn func(vm *sobek.Runtime) error) erro
 func (e *Engine) Drain(ctx context.Context) error { return e.Loop.run(ctx) }
 
 // Await settles a promise by driving the loop. It returns the fulfilled
-// value, or the rejection reason as a *sobek.Exception-compatible error.
-func (e *Engine) Await(ctx context.Context, v sobek.Value) (sobek.Value, error) {
-	p, ok := v.Export().(*sobek.Promise)
+// value, or the rejection reason as a *jsvm.Exception-compatible error.
+func (e *Engine) Await(ctx context.Context, v jsvm.Value) (jsvm.Value, error) {
+	p, ok := jsvm.AsPromise(v)
 	if !ok {
 		return v, nil
 	}
-	for p.State() == sobek.PromiseStatePending {
+	for p.State() == jsvm.PromiseStatePending {
 		switch err := e.Loop.step(ctx); err {
 		case nil:
 		case errIdle:
@@ -118,18 +114,18 @@ func (e *Engine) Await(ctx context.Context, v sobek.Value) (sobek.Value, error) 
 			return nil, err
 		}
 	}
-	if p.State() == sobek.PromiseStateRejected {
+	if p.State() == jsvm.PromiseStateRejected {
 		return nil, &RejectionError{Value: p.Result()}
 	}
 	return p.Result(), nil
 }
 
 // RejectionError wraps a rejected promise's reason.
-type RejectionError struct{ Value sobek.Value }
+type RejectionError struct{ Value jsvm.Value }
 
 func (r *RejectionError) Error() string {
-	if o, ok := r.Value.(*sobek.Object); ok {
-		if st := o.Get("stack"); st != nil && !sobek.IsUndefined(st) {
+	if o, ok := r.Value.(*jsvm.Object); ok {
+		if st := o.Get("stack"); st != nil && !jsvm.IsUndefined(st) {
 			return st.String()
 		}
 	}
@@ -143,8 +139,8 @@ func (e *Engine) installTimers() {
 	vm := e.VM
 	timers := vm.NewObject()
 	// set(fn, ms, repeat) -> id. Arguments are bound in JS.
-	_ = timers.Set("set", func(fc sobek.FunctionCall) sobek.Value {
-		fn, ok := sobek.AssertFunction(fc.Argument(0))
+	_ = timers.Set("set", func(fc jsvm.FunctionCall) jsvm.Value {
+		fn, ok := jsvm.AssertFunction(fc.Argument(0))
 		if !ok {
 			panic(vm.NewTypeError("timer callback is not a function"))
 		}
@@ -153,7 +149,7 @@ func (e *Engine) installTimers() {
 			ms = 0
 		}
 		id := e.Loop.SetTimer(time.Duration(ms*float64(time.Millisecond)), fc.Argument(2).ToBoolean(), func() error {
-			_, err := fn(sobek.Undefined())
+			_, err := fn(jsvm.Undefined())
 			return err
 		})
 		return vm.ToValue(id)

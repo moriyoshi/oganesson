@@ -4,24 +4,24 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/htmlindex"
 	"golang.org/x/text/transform"
 )
 
 func (h *host) installEncoding() {
-	h.set("utf8Encode", func(s string) sobek.Value { return h.buffer([]byte(s)) })
+	h.set("utf8Encode", func(s string) jsvm.Value { return h.buffer([]byte(s)) })
 	// newDecoder(label, fatal) -> {name, decode(bytes, stream)} or null for an
 	// unknown label. BOM handling stays in JS.
-	h.set("newDecoder", func(label string, fatal bool) sobek.Value {
+	h.set("newDecoder", func(label string, fatal bool) jsvm.Value {
 		name, dec := lookupDecoder(label, fatal)
 		if dec == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		obj := h.vm.NewObject()
 		_ = obj.Set("name", name)
-		_ = obj.Set("decode", func(fc sobek.FunctionCall) sobek.Value {
+		_ = obj.Set("decode", func(fc jsvm.FunctionCall) jsvm.Value {
 			s, ok := dec.decode(h.bytes(fc.Argument(0)), fc.Argument(1).ToBoolean())
 			if !ok {
 				panic(h.vm.NewTypeError("The encoded data was not valid for encoding " + name))

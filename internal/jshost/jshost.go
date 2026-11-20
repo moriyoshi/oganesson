@@ -17,9 +17,9 @@ import (
 	"sync"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
 	"github.com/microsoft/TypeScript/tsc/ogapi"
 	"github.com/moriyoshi/oganesson/internal/gojatarget"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/internal/wasm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"github.com/moriyoshi/oganesson/runtime/nodeshim"
@@ -637,8 +637,8 @@ func (h *Host) EvalWith(ctx context.Context, code, resultExpr string, setup func
 			return nil, err
 		}
 	}
-	var result, done sobek.Value
-	err := e.Run(ctx, func(vm *sobek.Runtime) error {
+	var result, done jsvm.Value
+	err := e.Run(ctx, func(vm *jsvm.Runtime) error {
 		if _, err := vm.RunScript("og-build.js", code); err != nil {
 			return err
 		}
@@ -650,12 +650,12 @@ func (h *Host) EvalWith(ctx context.Context, code, resultExpr string, setup func
 		return nil, err
 	}
 	// A TopLevelAwait bundle finishes evaluating first.
-	if done != nil && !sobek.IsUndefined(done) {
+	if done != nil && !jsvm.IsUndefined(done) {
 		if _, err := e.Await(ctx, done); err != nil {
 			return nil, err
 		}
 	}
-	err = e.Run(ctx, func(vm *sobek.Runtime) error {
+	err = e.Run(ctx, func(vm *jsvm.Runtime) error {
 		v, err := vm.RunString(resultExpr)
 		result = v
 		return err
@@ -668,12 +668,12 @@ func (h *Host) EvalWith(ctx context.Context, code, resultExpr string, setup func
 		return nil, err
 	}
 	// Round-trip through JSON in JS so the result is plain data.
-	stringify, _ := sobek.AssertFunction(e.VM.Get("JSON").ToObject(e.VM).Get("stringify"))
-	s, err := stringify(sobek.Undefined(), v)
+	stringify, _ := jsvm.AssertFunction(e.VM.Get("JSON").ToObject(e.VM).Get("stringify"))
+	s, err := stringify(jsvm.Undefined(), v)
 	if err != nil {
 		return nil, err
 	}
-	if sobek.IsUndefined(s) {
+	if jsvm.IsUndefined(s) {
 		return nil, nil
 	}
 	var out2 any

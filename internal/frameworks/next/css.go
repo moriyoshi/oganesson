@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // CSS support (global CSS and CSS Modules), standing in for Next's webpack
@@ -311,7 +311,7 @@ func (b *builder) postcss(path string) (string, error) {
 
 // evalCSSModuleMap runs esbuild's generated IIFE to read the class map.
 func evalCSSModuleMap(js string) (map[string]string, error) {
-	vm := sobek.New()
+	vm := jsvm.New()
 	if _, err := vm.RunString(js); err != nil {
 		return nil, err
 	}

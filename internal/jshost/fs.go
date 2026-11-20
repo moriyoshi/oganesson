@@ -11,7 +11,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // fileReads records absolute paths that build-time JS reads through og.fs, so
@@ -71,7 +71,7 @@ func (r *fileReads) assets() []string {
 // come back as {code, message} records; fs.js throws Node-style errors.
 // Relative paths are relative to writeRoot, which build-time JS sees as
 // process.cwd() (not og's own working directory).
-func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
+func installFS(vm *jsvm.Runtime, writeRoot string, rec *fileReads) error {
 	o := vm.NewObject()
 	cwdPath := func(p string) string {
 		if p == "" || filepath.IsAbs(p) {
@@ -79,7 +79,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		}
 		return filepath.Join(writeRoot, p)
 	}
-	errRec := func(err error, syscallName, path string) sobek.Value {
+	errRec := func(err error, syscallName, path string) jsvm.Value {
 		code := "EIO"
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
@@ -100,7 +100,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		_ = r.Set("path", path)
 		return r
 	}
-	statRec := func(st os.FileInfo) sobek.Value {
+	statRec := func(st os.FileInfo) jsvm.Value {
 		r := vm.NewObject()
 		_ = r.Set("isFile", st.Mode().IsRegular())
 		_ = r.Set("isDirectory", st.IsDir())
@@ -112,7 +112,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		_ = r.Set("mode", int64(st.Mode().Perm()))
 		return r
 	}
-	_ = o.Set("stat", func(p string, follow bool) sobek.Value {
+	_ = o.Set("stat", func(p string, follow bool) jsvm.Value {
 		p = cwdPath(p)
 		var st os.FileInfo
 		var err error
@@ -126,7 +126,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		}
 		return statRec(st)
 	})
-	_ = o.Set("readFile", func(p string) sobek.Value {
+	_ = o.Set("readFile", func(p string) jsvm.Value {
 		p = cwdPath(p)
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -135,7 +135,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		rec.add(p)
 		return vm.ToValue(vm.NewArrayBuffer(b))
 	})
-	_ = o.Set("readdir", func(p string) sobek.Value {
+	_ = o.Set("readdir", func(p string) jsvm.Value {
 		p = cwdPath(p)
 		entries, err := os.ReadDir(p)
 		if err != nil {
@@ -152,7 +152,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		}
 		return vm.ToValue(out)
 	})
-	_ = o.Set("realpath", func(p string) sobek.Value {
+	_ = o.Set("realpath", func(p string) jsvm.Value {
 		p = cwdPath(p)
 		r, err := filepath.EvalSymlinks(p)
 		if err != nil {
@@ -161,7 +161,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		abs, _ := filepath.Abs(r)
 		return vm.ToValue(abs)
 	})
-	_ = o.Set("readlink", func(p string) sobek.Value {
+	_ = o.Set("readlink", func(p string) jsvm.Value {
 		p = cwdPath(p)
 		r, err := os.Readlink(p)
 		if err != nil {
@@ -170,7 +170,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		return vm.ToValue(r)
 	})
 	root, _ := filepath.Abs(writeRoot)
-	writable := func(p string) (string, sobek.Value) {
+	writable := func(p string) (string, jsvm.Value) {
 		abs, err := filepath.Abs(p)
 		if err != nil || root == "" || (abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator))) {
 			r := vm.NewObject()
@@ -182,7 +182,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		}
 		return abs, nil
 	}
-	_ = o.Set("writeFile", func(p string, data sobek.Value, appendTo bool) sobek.Value {
+	_ = o.Set("writeFile", func(p string, data jsvm.Value, appendTo bool) jsvm.Value {
 		p = cwdPath(p)
 		abs, denied := writable(p)
 		if denied != nil {
@@ -192,7 +192,7 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		switch v := data.Export().(type) {
 		case []byte:
 			b = v
-		case sobek.ArrayBuffer:
+		case jsvm.ArrayBuffer:
 			b = v.Bytes()
 		default:
 			b = []byte(data.String())
@@ -211,9 +211,9 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		if err != nil {
 			return errRec(err, "open", p)
 		}
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
-	_ = o.Set("mkdir", func(p string, recursive bool) sobek.Value {
+	_ = o.Set("mkdir", func(p string, recursive bool) jsvm.Value {
 		p = cwdPath(p)
 		abs, denied := writable(p)
 		if denied != nil {
@@ -228,9 +228,9 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		if err != nil {
 			return errRec(err, "mkdir", p)
 		}
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
-	_ = o.Set("rm", func(p string, recursive bool) sobek.Value {
+	_ = o.Set("rm", func(p string, recursive bool) jsvm.Value {
 		p = cwdPath(p)
 		abs, denied := writable(p)
 		if denied != nil {
@@ -245,9 +245,9 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		if err != nil {
 			return errRec(err, "rm", p)
 		}
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
-	_ = o.Set("rename", func(from, to string) sobek.Value {
+	_ = o.Set("rename", func(from, to string) jsvm.Value {
 		from = cwdPath(from)
 		to = cwdPath(to)
 		a, denied := writable(from)
@@ -261,9 +261,9 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		if err := os.Rename(a, b); err != nil {
 			return errRec(err, "rename", from)
 		}
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
-	_ = o.Set("chmod", func(p string, mode int64) sobek.Value {
+	_ = o.Set("chmod", func(p string, mode int64) jsvm.Value {
 		p = cwdPath(p)
 		abs, denied := writable(p)
 		if denied != nil {
@@ -272,13 +272,13 @@ func installFS(vm *sobek.Runtime, writeRoot string, rec *fileReads) error {
 		if err := os.Chmod(abs, os.FileMode(mode)&os.ModePerm); err != nil {
 			return errRec(err, "chmod", p)
 		}
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
 	install, err := vm.RunString(`(function (o) { Object.defineProperty(globalThis, Symbol.for("og.fs"), { value: o }); })`)
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), o)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), o)
 	return err
 }

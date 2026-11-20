@@ -3,14 +3,15 @@ package jshost
 import (
 	_ "embed"
 	"fmt"
-	"github.com/moriyoshi/oganesson/runtime/natives"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/gojatarget"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
+	"github.com/moriyoshi/oganesson/runtime/natives"
 	"github.com/moriyoshi/oganesson/third_party/goja_nodejs/require"
 )
 
@@ -184,13 +185,15 @@ func nativeModuleCJS(pkg string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	res := api.Transform(src, api.TransformOptions{Format: api.FormatCommonJS, Loader: api.LoaderJS, Target: api.ES2020})
+	opts := gojatarget.TransformOptions(api.LoaderJS, pkg)
+	opts.Format = api.FormatCommonJS
+	res := api.Transform(src, opts)
 	if len(res.Errors) > 0 {
 		return "", false
 	}
 	// require("sharp") is the function itself, as the package's CommonJS
 	// is (named exports stay properties of it).
-	code := string(res.Code) + "\n{ const d = module.exports.default; for (const k of Object.keys(module.exports)) if (k !== \"default\") d[k] = module.exports[k]; module.exports = d; }\n"
+	code := gojatarget.Finish(string(res.Code)) + "\n{ const d = module.exports.default; for (const k of Object.keys(module.exports)) if (k !== \"default\") d[k] = module.exports[k]; module.exports = d; }\n"
 	nativeCJS.Store(pkg, code)
 	return code, true
 }
@@ -222,7 +225,7 @@ const lightningcssWasmMissing = `(() => { const e = new Error("og: lightningcss 
 
 // embeddedLoader bundles one of embeddedModules on first require.
 func (h *Host) embeddedLoader(name string) require.ModuleLoader {
-	return func(vm *sobek.Runtime, module *sobek.Object) {
+	return func(vm *jsvm.Runtime, module *jsvm.Object) {
 		code, err := h.bundle(fmt.Sprintf("import * as m from %q; globalThis.__ogEmbedded = m;", name), []api.Plugin{embeddedPlugin()})
 		if err != nil {
 			panic(vm.NewGoError(err))

@@ -9,7 +9,7 @@ import (
 
 	"github.com/andybalholm/brotli"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/codec"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
@@ -19,8 +19,8 @@ import (
 func InstallZlib(e *engine.Engine) error {
 	vm := e.VM
 	o := vm.NewObject()
-	compress := func(mk func(io.Writer, int) (io.WriteCloser, error)) func([]byte, int) sobek.Value {
-		return func(in []byte, level int) sobek.Value {
+	compress := func(mk func(io.Writer, int) (io.WriteCloser, error)) func([]byte, int) jsvm.Value {
+		return func(in []byte, level int) jsvm.Value {
 			var buf bytes.Buffer
 			w, err := mk(&buf, level)
 			if err == nil {
@@ -35,8 +35,8 @@ func InstallZlib(e *engine.Engine) error {
 			return vm.ToValue(vm.NewArrayBuffer(buf.Bytes()))
 		}
 	}
-	decompress := func(mk func(io.Reader) (io.Reader, error)) func([]byte, int) sobek.Value {
-		return func(in []byte, _ int) sobek.Value {
+	decompress := func(mk func(io.Reader) (io.Reader, error)) func([]byte, int) jsvm.Value {
+		return func(in []byte, _ int) jsvm.Value {
 			r, err := mk(bytes.NewReader(in))
 			var out []byte
 			if err == nil {
@@ -70,14 +70,14 @@ func InstallZlib(e *engine.Engine) error {
 		"gzip": "gzip", "deflate": "deflate", "deflateRaw": "deflate-raw", "brotliCompress": "brotli",
 		"gunzip": "gzip", "inflate": "deflate", "inflateRaw": "deflate-raw", "brotliDecompress": "brotli", "unzip": "unzip",
 	}
-	_ = o.Set("stream", func(kind string, level int) sobek.Value {
+	_ = o.Set("stream", func(kind string, level int) jsvm.Value {
 		format, ok := formats[kind]
 		if !ok {
 			panic(vm.NewTypeError("og: unknown zlib stream " + kind))
 		}
 		obj := vm.NewObject()
-		buf := func(b []byte) sobek.Value { return vm.ToValue(vm.NewArrayBuffer(b)) }
-		check := func(b []byte, err error) sobek.Value {
+		buf := func(b []byte) jsvm.Value { return vm.ToValue(vm.NewArrayBuffer(b)) }
+		check := func(b []byte, err error) jsvm.Value {
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
@@ -89,18 +89,18 @@ func InstallZlib(e *engine.Engine) error {
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
-			_ = obj.Set("write", func(in []byte) sobek.Value { return buf(c.Write(in)) })
-			_ = obj.Set("flush", func() sobek.Value { return buf(c.Flush()) })
-			_ = obj.Set("finish", func() sobek.Value { return buf(c.Close()) })
+			_ = obj.Set("write", func(in []byte) jsvm.Value { return buf(c.Write(in)) })
+			_ = obj.Set("flush", func() jsvm.Value { return buf(c.Flush()) })
+			_ = obj.Set("finish", func() jsvm.Value { return buf(c.Close()) })
 		default:
 			d, err := codec.NewDecoder(format)
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
 			e.OnClose(d.Stop)
-			_ = obj.Set("write", func(in []byte) sobek.Value { return check(d.Feed(in)) })
-			_ = obj.Set("flush", func() sobek.Value { return check(d.Feed(nil)) })
-			_ = obj.Set("finish", func() sobek.Value { return check(d.Close()) })
+			_ = obj.Set("write", func(in []byte) jsvm.Value { return check(d.Feed(in)) })
+			_ = obj.Set("flush", func() jsvm.Value { return check(d.Feed(nil)) })
+			_ = obj.Set("finish", func() jsvm.Value { return check(d.Close()) })
 		}
 		return obj
 	})
@@ -108,7 +108,7 @@ func InstallZlib(e *engine.Engine) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), o)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), o)
 	return err
 }
