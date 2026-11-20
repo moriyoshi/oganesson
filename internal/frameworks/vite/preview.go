@@ -18,7 +18,7 @@ import (
 )
 
 // previewServer serves a just-built app the way the packaged binary will
-// (runtime/app over the client output and the server bundled for Goja),
+// (runtime/app over the client output and the bundled server),
 // on a local port: what `vite preview` is to Vite, for build-time tools
 // that render through it (TanStack Start's prerendering and SPA shell).
 type previewServer struct {
@@ -32,11 +32,11 @@ var (
 	previewID int
 )
 
-// startPreview bundles serverEntry for Goja and serves it behind the files
+// startPreview bundles serverEntry for the build host and serves it behind the files
 // of clientDir; env reaches the server's process.env.
 func startPreview(root, clientDir, serverEntry string, env map[string]string) (id int, url string, err error) {
 	files := fstest.MapFS{}
-	js, err := bundleServer(root, serverEntry, nil) // its output is not shipped
+	js, err := bundleServer(root, serverEntry, Options{}) // its output is not shipped
 	if err != nil {
 		return 0, "", err
 	}
@@ -78,7 +78,7 @@ func startProgramPreview(root string) (id int, url string, err error) {
 	if prog == nil {
 		return 0, "", fmt.Errorf("og: no preview / start / serve script runs a server program in %s", root)
 	}
-	js, err := bundleProgram(root, prog.File, prog.Args, pkg.DevDependencies, nil) // its output is not shipped
+	js, err := bundleProgram(root, prog.File, prog.Args, pkg.DevDependencies, Options{}) // its output is not shipped
 	if err != nil {
 		return 0, "", err
 	}

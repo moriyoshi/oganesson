@@ -78,12 +78,16 @@ const provided = {
   BindingCallableBuiltinPlugin,
 };
 
-const binding = new Proxy(
-  {},
-  {
-    get: (_, k) => (k === "__esModule" ? false : provided[k] || unavailable(String(k))),
+// Rolldown's CommonJS interop copies own properties and preserves the
+// prototype. Keep the implemented exports enumerable and use the prototype
+// for stubs so unsupported binding names also survive interop.
+const stubs = new Proxy(Object.prototype, {
+  get: (target, k, receiver) => {
+    if (k === "__esModule") return false;
+    return Reflect.has(target, k) ? Reflect.get(target, k, receiver) : unavailable(String(k));
   },
-);
+});
+const binding = Object.assign(Object.create(stubs), provided);
 
 // The module's own exports: require_binding and its __toESM helper.
 export const t = () => binding;

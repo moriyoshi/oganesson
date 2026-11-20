@@ -11,19 +11,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 
 // bigInt returns the JS BigInt for the decimal string s. int64 and uint64
 // convert to a bigint, not a number, so values beyond 2^53 keep full precision.
-func bigInt(vm *sobek.Runtime, s string) sobek.Value {
-	fn, ok := sobek.AssertFunction(vm.Get("BigInt"))
+func bigInt(vm *jsvm.Runtime, s string) jsvm.Value {
+	fn, ok := jsvm.AssertFunction(vm.Get("BigInt"))
 	if !ok {
 		return vm.ToValue(s)
 	}
-	v, err := fn(sobek.Undefined(), vm.ToValue(s))
+	v, err := fn(jsvm.Undefined(), vm.ToValue(s))
 	if err != nil {
 		panic(vm.NewGoError(err))
 	}
@@ -48,19 +48,19 @@ var bigintMarkerRe = regexp.MustCompile(`"` + bigintMarkerPrefix + `(-?\d+)` + b
 // as encoding/json decodes it (a nested bigint survives the JSON round-trip as
 // a bare number, so a struct/slice/map field keeps full 64-bit precision).
 // undefined gives the zero value.
-func toGo(vm *sobek.Runtime, v sobek.Value, t reflect.Type) (reflect.Value, error) {
-	if v == nil || sobek.IsUndefined(v) {
+func toGo(vm *jsvm.Runtime, v jsvm.Value, t reflect.Type) (reflect.Value, error) {
+	if v == nil || jsvm.IsUndefined(v) {
 		return reflect.Zero(t), nil
 	}
 	switch t {
 	case bytesType:
-		if sobek.IsNull(v) {
+		if jsvm.IsNull(v) {
 			return reflect.Zero(t), nil
 		}
 		switch x := v.Export().(type) {
 		case []byte:
 			return reflect.ValueOf(append([]byte(nil), x...)), nil
-		case sobek.ArrayBuffer:
+		case jsvm.ArrayBuffer:
 			return reflect.ValueOf(append([]byte(nil), x.Bytes()...)), nil
 		case string:
 			return reflect.ValueOf([]byte(x)), nil
@@ -96,13 +96,13 @@ func toGo(vm *sobek.Runtime, v sobek.Value, t reflect.Type) (reflect.Value, erro
 	// JSON.stringify would throw on a nested bigint ("Do not know how to
 	// serialize a BigInt"); the replacer turns each into a marker string that
 	// json.Unmarshal then reads back as a bare number (see bigintMarker).
-	stringify, _ := sobek.AssertFunction(vm.Get("JSON").ToObject(vm).Get("stringify"))
-	s, err := stringify(sobek.Undefined(), v, vm.ToValue(markBigInts(vm)))
+	stringify, _ := jsvm.AssertFunction(vm.Get("JSON").ToObject(vm).Get("stringify"))
+	s, err := stringify(jsvm.Undefined(), v, vm.ToValue(markBigInts(vm)))
 	if err != nil {
 		return reflect.Value{}, err
 	}
 	p := reflect.New(t)
-	if sobek.IsUndefined(s) {
+	if jsvm.IsUndefined(s) {
 		return p.Elem(), nil
 	}
 	text := bigintMarkerRe.ReplaceAllString(s.String(), "$1")
@@ -115,8 +115,8 @@ func toGo(vm *sobek.Runtime, v sobek.Value, t reflect.Type) (reflect.Value, erro
 // markBigInts is a JSON.stringify replacer that renders each bigint as a
 // bigintMarker string, so stringify does not throw and toGo can restore the
 // value with full precision.
-func markBigInts(vm *sobek.Runtime) func(sobek.FunctionCall) sobek.Value {
-	return func(call sobek.FunctionCall) sobek.Value {
+func markBigInts(vm *jsvm.Runtime) func(jsvm.FunctionCall) jsvm.Value {
+	return func(call jsvm.FunctionCall) jsvm.Value {
 		val := call.Argument(1)
 		if bi, ok := val.Export().(*big.Int); ok {
 			return vm.ToValue(bigintMarkerPrefix + bi.String() + bigintMarkerSuffix)
@@ -131,14 +131,14 @@ func markBigInts(vm *sobek.Runtime) func(sobek.FunctionCall) sobek.Value {
 // full 64-bit precision) rather than a number. Nested []byte and time.Time keep
 // their JSON forms (a base64 string, an RFC 3339 string), as the generated .d.ts
 // declares.
-func toJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
+func toJS(vm *jsvm.Runtime, v reflect.Value) jsvm.Value {
 	if !v.IsValid() {
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	}
 	switch v.Type() {
 	case bytesType:
 		if v.IsNil() {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		b := append([]byte(nil), v.Bytes()...)
 		u, err := vm.New(vm.Get("Uint8Array"), vm.ToValue(vm.NewArrayBuffer(b)))
@@ -162,10 +162,10 @@ func toJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
 // maps with non-string keys defer wholesale to encoding/json, so json's own
 // promotion and key rules still apply (nested int64 precision is not preserved
 // inside those rarer shapes).
-func nestedJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
+func nestedJS(vm *jsvm.Runtime, v reflect.Value) jsvm.Value {
 	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		v = v.Elem()
 	}
@@ -193,14 +193,14 @@ func nestedJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
 			return jsonToJS(vm, v) // []byte -> base64 string (or null), as json does when nested
 		}
 		if v.IsNil() {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return seqToJS(vm, v)
 	case reflect.Array:
 		return seqToJS(vm, v)
 	case reflect.Map:
 		if v.IsNil() {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		if v.Type().Key().Kind() != reflect.String {
 			return jsonToJS(vm, v)
@@ -213,7 +213,7 @@ func nestedJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
 }
 
 // seqToJS converts a slice or array to a JS array.
-func seqToJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
+func seqToJS(vm *jsvm.Runtime, v reflect.Value) jsvm.Value {
 	items := make([]interface{}, v.Len())
 	for i := range items {
 		items[i] = nestedJS(vm, v.Index(i))
@@ -223,7 +223,7 @@ func seqToJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
 
 // mapToJS converts a string-keyed map to a JS object, keys sorted as
 // encoding/json sorts them.
-func mapToJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
+func mapToJS(vm *jsvm.Runtime, v reflect.Value) jsvm.Value {
 	keys := v.MapKeys()
 	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
 	o := vm.NewObject()
@@ -239,7 +239,7 @@ func mapToJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
 // (a tagged or non-struct anonymous field, or a json.Marshaler), or a field
 // name that appears at more than one depth (json's shadowing), defers the whole
 // struct to encoding/json so its own rules hold.
-func structToJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
+func structToJS(vm *jsvm.Runtime, v reflect.Value) jsvm.Value {
 	fields, ok := flattenFields(v)
 	if !ok {
 		return jsonToJS(vm, v)
@@ -355,13 +355,13 @@ func isEmptyValue(v reflect.Value) bool {
 
 // jsonToJS converts a value exactly as encoding/json does, through a JSON
 // round-trip (its nested forms: base64 for []byte, RFC 3339 for time.Time).
-func jsonToJS(vm *sobek.Runtime, v reflect.Value) sobek.Value {
+func jsonToJS(vm *jsvm.Runtime, v reflect.Value) jsvm.Value {
 	b, err := json.Marshal(v.Interface())
 	if err != nil {
 		panic(vm.NewGoError(err))
 	}
-	parse, _ := sobek.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
-	out, err := parse(sobek.Undefined(), vm.ToValue(string(b)))
+	parse, _ := jsvm.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+	out, err := parse(jsvm.Undefined(), vm.ToValue(string(b)))
 	if err != nil {
 		panic(err)
 	}

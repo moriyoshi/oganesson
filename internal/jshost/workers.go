@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -32,8 +32,8 @@ type worker struct {
 	id     int
 	cancel context.CancelFunc
 	// Parent side (parent loop goroutine only).
-	keep      func(func(*sobek.Runtime) error) // holds the parent loop while referenced
-	callbacks *sobek.Object                    // {message, error, exit, online}
+	keep      func(func(*jsvm.Runtime) error) // holds the parent loop while referenced
+	callbacks *jsvm.Object                    // {message, error, exit, online}
 	exited    bool
 	weak      bool // unreferenced: counted in the parent loop's weak handles
 	// Worker side.
@@ -45,12 +45,12 @@ func (h *Host) installWorkers(e *engine.Engine) error {
 	wh := &workerHost{h: h, parent: e, all: map[int]*worker{}}
 	vm := e.VM
 	o := vm.NewObject()
-	_ = o.Set("spawn", func(file, data string, callbacks *sobek.Object, env string) int {
+	_ = o.Set("spawn", func(file, data string, callbacks *jsvm.Object, env string) int {
 		return wh.spawn(file, data, callbacks, env)
 	})
 	_ = o.Set("post", func(id int, msg string) {
 		if w := wh.get(id); w != nil && w.we != nil {
-			w.we.Loop.Post(func(vm *sobek.Runtime) error { return deliver(vm, msg) })
+			w.we.Loop.Post(func(vm *jsvm.Runtime) error { return deliver(vm, msg) })
 		}
 	})
 	_ = o.Set("terminate", func(id int) {
@@ -73,7 +73,7 @@ func (h *Host) installWorkers(e *engine.Engine) error {
 		case !ref && w.keep != nil:
 			k := w.keep
 			w.keep = nil
-			k(func(*sobek.Runtime) error { return nil })
+			k(func(*jsvm.Runtime) error { return nil })
 			w.weak = true
 			e.Loop.Weak(1)
 		}
@@ -96,20 +96,20 @@ func (wh *workerHost) get(id int) *worker {
 
 // deliver hands a message to the worker's parentPort (worker_threads.js
 // sets the context's onMessage).
-func deliver(vm *sobek.Runtime, msg string) error {
+func deliver(vm *jsvm.Runtime, msg string) error {
 	v, err := vm.RunString(`globalThis[Symbol.for("og.workerContext")]`)
-	if err != nil || sobek.IsUndefined(v) {
+	if err != nil || jsvm.IsUndefined(v) {
 		return err
 	}
-	if fn, ok := sobek.AssertFunction(v.ToObject(vm).Get("onMessage")); ok {
-		_, err = fn(sobek.Undefined(), vm.ToValue(msg))
+	if fn, ok := jsvm.AssertFunction(v.ToObject(vm).Get("onMessage")); ok {
+		_, err = fn(jsvm.Undefined(), vm.ToValue(msg))
 	}
 	return err
 }
 
 // spawn starts a worker for file (on the parent loop goroutine). env, if
 // not "", is the worker's process.env as JSON (the Worker's env option).
-func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env string) int {
+func (wh *workerHost) spawn(file, data string, callbacks *jsvm.Object, env string) int {
 	wh.mu.Lock()
 	wh.next++
 	id := wh.next
@@ -119,21 +119,21 @@ func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env stri
 	wh.mu.Unlock()
 	w.keep = wh.parent.Loop.Async()
 	// Parent-side callbacks, on the parent loop.
-	call := func(name string, args ...any) func(*sobek.Runtime) error {
-		return func(vm *sobek.Runtime) error {
-			fn, ok := sobek.AssertFunction(w.callbacks.Get(name))
+	call := func(name string, args ...any) func(*jsvm.Runtime) error {
+		return func(vm *jsvm.Runtime) error {
+			fn, ok := jsvm.AssertFunction(w.callbacks.Get(name))
 			if !ok {
 				return nil
 			}
-			vals := make([]sobek.Value, len(args))
+			vals := make([]jsvm.Value, len(args))
 			for i, a := range args {
 				vals[i] = vm.ToValue(a)
 			}
-			_, err := fn(sobek.Undefined(), vals...)
+			_, err := fn(jsvm.Undefined(), vals...)
 			return err
 		}
 	}
-	toParent := func(fn func(*sobek.Runtime) error) { wh.parent.Loop.Post(fn) }
+	toParent := func(fn func(*jsvm.Runtime) error) { wh.parent.Loop.Post(fn) }
 
 	// An uncaught error (or unhandled rejection) ends the worker with code
 	// 1 after its error event, as in Node.
@@ -154,7 +154,7 @@ func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env stri
 			_ = wctx.Set("workerData", data)
 			_ = wctx.Set("post", func(msg string) { toParent(call("message", msg)) })
 			_ = wctx.Set("close", func() { cancel() })
-			var held func(func(*sobek.Runtime) error) // worker loop goroutine only
+			var held func(func(*jsvm.Runtime) error) // worker loop goroutine only
 			_ = wctx.Set("hold", func(on bool) {
 				switch {
 				case on && held == nil:
@@ -162,7 +162,7 @@ func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env stri
 				case !on && held != nil:
 					k := held
 					held = nil
-					k(func(*sobek.Runtime) error { return nil })
+					k(func(*jsvm.Runtime) error { return nil })
 				}
 			})
 			// process.exit in a worker ends the worker with that code.
@@ -206,12 +206,12 @@ func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env stri
 				if err != nil {
 					return err
 				}
-				fn, _ := sobek.AssertFunction(setEnv)
-				if _, err := fn(sobek.Undefined(), we.VM.ToValue(env)); err != nil {
+				fn, _ := jsvm.AssertFunction(setEnv)
+				if _, err := fn(jsvm.Undefined(), we.VM.ToValue(env)); err != nil {
 					return err
 				}
 			}
-			return we.Run(ctx, func(vm *sobek.Runtime) error {
+			return we.Run(ctx, func(vm *jsvm.Runtime) error {
 				// As in Node, the worker ends when its loop is idle; its
 				// parentPort holds the loop while it has "message" listeners
 				// and is not unref'd (hold, from worker_threads.js).
@@ -234,7 +234,7 @@ func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env stri
 			code = exitCode
 		}
 		cancel()
-		exit := func(vm *sobek.Runtime) error {
+		exit := func(vm *jsvm.Runtime) error {
 			w.exited = true
 			if w.weak {
 				w.weak = false
@@ -247,7 +247,7 @@ func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env stri
 		}
 		// The exit event releases the parent's hold (or is posted when
 		// the worker was unreferenced).
-		toParent(func(vm *sobek.Runtime) error {
+		toParent(func(vm *jsvm.Runtime) error {
 			if w.keep != nil {
 				k := w.keep
 				w.keep = nil
@@ -265,12 +265,12 @@ func (wh *workerHost) spawn(file, data string, callbacks *sobek.Object, env stri
 const workerProcess = `process.exit = (code) => globalThis[Symbol.for("og.workerContext")].exit(code === undefined ? Number(process.exitCode ?? 0) : Number(code));`
 
 // defineSymbol sets globalThis[Symbol.for(name)] to v.
-func defineSymbol(vm *sobek.Runtime, name string, v sobek.Value) error {
+func defineSymbol(vm *jsvm.Runtime, name string, v jsvm.Value) error {
 	install, err := vm.RunString(`(n, v) => Object.defineProperty(globalThis, Symbol.for(n), { value: v, configurable: true })`)
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), vm.ToValue(name), v)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), vm.ToValue(name), v)
 	return err
 }

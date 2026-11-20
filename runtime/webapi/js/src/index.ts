@@ -27,7 +27,7 @@ import { inspect, format } from "./inspect";
 
 export default function install(host: Host) {
   setHost(host);
-  installRegExp();
+  if (!__ogNativeBuiltins) installRegExp();
   installPolyfills();
   installConsole();
   installTimers();
@@ -47,7 +47,7 @@ export default function install(host: Host) {
   installStructuredClone();
   installMessaging();
   installGlobals();
-  installIntl();
+  if (!__ogNativeBuiltins) installIntl();
   defineGlobal("AsyncLocalStorage", host.AsyncLocalStorage);
   // Internals shared with the Node shim modules (runtime/nodeshim).
   Object.defineProperty(globalThis, Symbol.for("og.internals"), {

@@ -7,12 +7,12 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // IncomingRequest converts r into a JS Request whose body streams from
 // r.Body. abort aborts the request's signal (e.g. on client disconnect).
-func (rt *Runtime) IncomingRequest(r *http.Request) (req sobek.Value, abort func(), err error) {
+func (rt *Runtime) IncomingRequest(r *http.Request) (req jsvm.Value, abort func(), err error) {
 	vm := rt.h.vm
 	scheme := "http"
 	if r.TLS != nil {
@@ -37,14 +37,14 @@ func (rt *Runtime) IncomingRequest(r *http.Request) (req sobek.Value, abort func
 	_ = spec.Set("headers", headers)
 	_ = spec.Set("bodyId", bodyID)
 
-	fn, _ := sobek.AssertFunction(rt.exports.Get("incomingRequest"))
-	res, err := fn(sobek.Undefined(), spec)
+	fn, _ := jsvm.AssertFunction(rt.exports.Get("incomingRequest"))
+	res, err := fn(jsvm.Undefined(), spec)
 	if err != nil {
 		return nil, nil, err
 	}
 	obj := res.ToObject(vm)
-	abortFn, _ := sobek.AssertFunction(obj.Get("abort"))
-	return obj.Get("request"), func() { _, _ = abortFn(sobek.Undefined()) }, nil
+	abortFn, _ := jsvm.AssertFunction(obj.Get("abort"))
+	return obj.Get("request"), func() { _, _ = abortFn(jsvm.Undefined()) }, nil
 }
 
 // ErrBadResponse reports a handler result that is not a usable Response.
@@ -53,10 +53,10 @@ var ErrBadResponse = errors.New("webapi: handler did not return a valid Response
 // WriteResponse streams a JS Response to w, flushing after every chunk so
 // that streamed HTML and RSC payloads reach the client incrementally.
 // headerSent reports whether the status line went out before any error.
-func (rt *Runtime) WriteResponse(ctx context.Context, w http.ResponseWriter, resp sobek.Value) (headerSent bool, err error) {
+func (rt *Runtime) WriteResponse(ctx context.Context, w http.ResponseWriter, resp jsvm.Value) (headerSent bool, err error) {
 	vm := rt.h.vm
-	infoFn, _ := sobek.AssertFunction(rt.exports.Get("responseInfo"))
-	iv, err := infoFn(sobek.Undefined(), resp)
+	infoFn, _ := jsvm.AssertFunction(rt.exports.Get("responseInfo"))
+	iv, err := infoFn(jsvm.Undefined(), resp)
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrBadResponse, err)
 	}
@@ -78,28 +78,28 @@ func (rt *Runtime) WriteResponse(ctx context.Context, w http.ResponseWriter, res
 	}
 	w.WriteHeader(int(info.Get("status").ToInteger()))
 
-	next, ok := sobek.AssertFunction(info.Get("next"))
+	next, ok := jsvm.AssertFunction(info.Get("next"))
 	if !ok {
 		return true, nil // null body
 	}
-	cancel, _ := sobek.AssertFunction(info.Get("cancel"))
+	cancel, _ := jsvm.AssertFunction(info.Get("cancel"))
 	flusher, _ := w.(http.Flusher)
 	for {
-		p, err := next(sobek.Undefined())
+		p, err := next(jsvm.Undefined())
 		if err != nil {
 			return true, err
 		}
 		chunk, err := rt.h.e.Await(ctx, p)
 		if err != nil {
-			_, _ = cancel(sobek.Undefined())
+			_, _ = cancel(jsvm.Undefined())
 			return true, err
 		}
-		if sobek.IsNull(chunk) {
+		if jsvm.IsNull(chunk) {
 			return true, nil
 		}
 		b, _ := chunk.Export().([]byte)
 		if _, err := w.Write(b); err != nil {
-			_, _ = cancel(sobek.Undefined())
+			_, _ = cancel(jsvm.Undefined())
 			return true, err
 		}
 		if flusher != nil {

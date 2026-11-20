@@ -6,10 +6,10 @@
 // Optional dependencies are skipped: they are almost always native binaries
 // (e.g. @next/swc-*, sharp) that Oganesson replaces. The exception is their
 // WebAssembly builds, which build-time JS runs (see internal/wasm): optional
-// "*wasm32*" packages declaring cpu "wasm32" (napi-rs wasm32-wasi builds,
-// e.g. @tailwindcss/oxide-wasm32-wasi), and the separately published wasm
-// builds and pure-JS stand-ins that runtime/natives substitutes for native
-// packages (lightningcss-wasm, bcryptjs).
+// "*wasm32*" packages declaring cpu "wasm32" or using the "-wasm32-wasi"
+// suffix without platform metadata (e.g. @tailwindcss/oxide-wasm32-wasi).
+// The installer also includes the separately published wasm builds and
+// pure-JS stand-ins registered by runtime/natives (lightningcss-wasm, bcryptjs).
 //
 // With a lockfile (package-lock.json, bun.lock, pnpm-lock.yaml, yarn.lock;
 // see lockfile.go) the installed versions are the lockfile's; without one,
@@ -352,8 +352,12 @@ func (in *installer) resolve(ctx context.Context, top, parent *node, deps map[st
 		if p.optional && (len(m.CPU) > 0 || len(m.OS) > 0) {
 			continue
 		}
-		if p.wasmOnly && !slices.Contains(m.CPU, "wasm32") && !isSubstitute(p.parent, name) {
-			continue
+		if p.wasmOnly {
+			// Some napi-rs WASI builds publish without cpu or os metadata.
+			untaggedWASI := len(m.CPU) == 0 && len(m.OS) == 0 && strings.HasSuffix(m.Name, "-wasm32-wasi")
+			if !slices.Contains(m.CPU, "wasm32") && !untaggedWASI && !isSubstitute(p.parent, name) {
+				continue
+			}
 		}
 		// Hoist to the top level when free, else nest under the requester.
 		host := top

@@ -8,7 +8,7 @@
 #
 # - Oganesson's own LICENSE comes first.
 # - Go: the toolchain's LICENSE, then every module in
-#   `go list -deps -tags nodynamic ./cmd/og`, unioned over the release
+#   both JavaScript engine builds, unioned over the release
 #   targets (OG_NOTICE_TARGETS overrides the list), since the set differs per
 #   platform (e.g. go-winio on windows).
 # - TypeScript-Go: the replaced module's LICENSE plus the repository's
@@ -71,13 +71,18 @@ section "Go (the Go standard library and runtime)" "$golicense"
 
 # -e: runtime/notices embeds this file, which may not exist yet.
 for target in $targets; do
-  GOOS=${target%/*} GOARCH=${target#*/} go list -e -deps -tags nodynamic \
+  for tags in nodynamic nodynamic,ekuma; do
+    GOOS=${target%/*} GOARCH=${target#*/} go list -e -deps -tags "$tags" \
     -f '{{with .Module}}{{if not .Main}}{{.Path}} {{.Version}} {{.Dir}}{{end}}{{end}}' ./cmd/og
+  done
 done | sort -u >"$tmp.mods"
 
 while read -r path version dir; do
   files=$(license_files "$dir")
   case $path in
+  github.com/hajimehoshi/ekuma)
+    files="$files $dir/internal/unicode/cldr/LICENSE $dir/internal/unicode/collation/LICENSE"
+    ;;
   github.com/microsoft/TypeScript/tsc)
     version=$(git -C "$dir/.." rev-parse HEAD)
     files="$files $dir/../NOTICE.txt"
@@ -93,7 +98,7 @@ while read -r path version dir; do
 done <"$tmp.mods"
 
 # Vendored Go (third_party/, not modules): goja_nodejs's require, rewritten
-# for Sobek by scripts/vendor-goja-nodejs.sh.
+# for og's JS host by scripts/vendor-goja-nodejs.sh.
 section "github.com/dop251/goja_nodejs $(cat third_party/goja_nodejs/VERSION) (vendored Go: require/)" third_party/goja_nodejs/LICENSE
 
 # Generated data: the RegExp v flag's emoji tables derive from Unicode's

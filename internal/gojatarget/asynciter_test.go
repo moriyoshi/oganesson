@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // TestLoweredAsyncIteratorPrototype: the idiom reaching
@@ -32,7 +32,7 @@ globalThis.result = [typeof AIP[Symbol.asyncIterator], it[Symbol.asyncIterator](
 	if len(res.Errors) > 0 {
 		t.Fatal(res.Errors[0].Text)
 	}
-	vm := sobek.New()
+	vm := jsvm.New()
 	if _, err := vm.RunString(Finish(string(res.OutputFiles[0].Contents))); err != nil {
 		t.Fatal(err)
 	}

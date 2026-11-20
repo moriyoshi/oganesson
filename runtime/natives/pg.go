@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/grafana/sobek"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"golang.org/x/sync/singleflight"
 )
@@ -266,7 +266,7 @@ func firstWord(s string) string {
 // pool.connect(), needed for transactions) are kept by an integer handle.
 type pgBinding struct {
 	e     *engine.Engine
-	vm    *sobek.Runtime
+	vm    *jsvm.Runtime
 	svc   *Postgres
 	ctx   context.Context
 	conns map[int64]*pgxpool.Conn
@@ -275,7 +275,7 @@ type pgBinding struct {
 
 // jsError turns a Go error into a node-pg-shaped JS Error: the server's message
 // and SQLSTATE as .code, so Drizzle/Kysely see the error they expect.
-func (b *pgBinding) jsError(err error) sobek.Value {
+func (b *pgBinding) jsError(err error) jsvm.Value {
 	msg, code := err.Error(), ""
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -289,8 +289,8 @@ func (b *pgBinding) jsError(err error) sobek.Value {
 }
 
 // params converts a JS array of bind values to Go for pgx. Called on the loop.
-func (b *pgBinding) params(v sobek.Value) []any {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (b *pgBinding) params(v jsvm.Value) []any {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return nil
 	}
 	o := v.ToObject(b.vm)
@@ -302,8 +302,8 @@ func (b *pgBinding) params(v sobek.Value) []any {
 	return out
 }
 
-func (b *pgBinding) toGo(v sobek.Value) any {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (b *pgBinding) toGo(v jsvm.Value) any {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return nil
 	}
 	switch x := v.Export().(type) {
@@ -317,7 +317,7 @@ func (b *pgBinding) toGo(v sobek.Value) any {
 		return x
 	case []byte:
 		return append([]byte(nil), x...)
-	case sobek.ArrayBuffer:
+	case jsvm.ArrayBuffer:
 		return append([]byte(nil), x.Bytes()...)
 	case time.Time:
 		return x
@@ -429,7 +429,7 @@ func toFloat(v any) (float64, bool) {
 
 // shape builds the host result (positional rows + field descriptors). Runs on
 // the loop.
-func (b *pgBinding) shape(res *pgResult) sobek.Value {
+func (b *pgBinding) shape(res *pgResult) jsvm.Value {
 	vm := b.vm
 	o := vm.NewObject()
 	fields := make([]any, len(res.fields))
@@ -465,13 +465,13 @@ func (b *pgBinding) shape(res *pgResult) sobek.Value {
 
 // async runs a query off the loop and settles a JS promise with the shaped
 // result, the established engine pattern (runtime/native, runtime/webapi).
-func (b *pgBinding) async(work func() (*pgResult, error)) sobek.Value {
+func (b *pgBinding) async(work func() (*pgResult, error)) jsvm.Value {
 	vm := b.vm
 	promise, resolve, reject := vm.NewPromise()
 	done := b.e.Loop.Async()
 	go func() {
 		res, err := work()
-		done(func(vm *sobek.Runtime) error {
+		done(func(vm *jsvm.Runtime) error {
 			if err != nil {
 				return reject(b.jsError(err))
 			}
@@ -483,7 +483,7 @@ func (b *pgBinding) async(work func() (*pgResult, error)) sobek.Value {
 
 // queryPool runs a one-off query on the shared pool (acquire+query+release).
 // raw asks for the Postgres text representation of each column (see pgResult).
-func (b *pgBinding) queryPool(dsn string, max int64, text string, params sobek.Value, raw bool) sobek.Value {
+func (b *pgBinding) queryPool(dsn string, max int64, text string, params jsvm.Value, raw bool) jsvm.Value {
 	args := b.params(params)
 	return b.async(func() (*pgResult, error) {
 		pool, err := b.svc.get(dsn, int32(max))
@@ -496,7 +496,7 @@ func (b *pgBinding) queryPool(dsn string, max int64, text string, params sobek.V
 
 // acquire pins a connection from the shared pool (pool.connect()); the handle
 // is returned to JS. Needed for transactions, which span one connection.
-func (b *pgBinding) acquire(dsn string, max int64) sobek.Value {
+func (b *pgBinding) acquire(dsn string, max int64) jsvm.Value {
 	vm := b.vm
 	promise, resolve, reject := vm.NewPromise()
 	done := b.e.Loop.Async()
@@ -506,7 +506,7 @@ func (b *pgBinding) acquire(dsn string, max int64) sobek.Value {
 		if err == nil {
 			conn, err = pool.Acquire(b.ctx)
 		}
-		done(func(vm *sobek.Runtime) error {
+		done(func(vm *jsvm.Runtime) error {
 			if err != nil {
 				return reject(b.jsError(err))
 			}
@@ -520,7 +520,7 @@ func (b *pgBinding) acquire(dsn string, max int64) sobek.Value {
 }
 
 // queryClient runs a query on a pinned connection.
-func (b *pgBinding) queryClient(id int64, text string, params sobek.Value, raw bool) sobek.Value {
+func (b *pgBinding) queryClient(id int64, text string, params jsvm.Value, raw bool) jsvm.Value {
 	args := b.params(params)
 	conn := b.conns[id]
 	return b.async(func() (*pgResult, error) {
@@ -556,7 +556,7 @@ func (b *pgBinding) registerTLS(caPEM, serverName string) string {
 	return key
 }
 
-func installPG(e *engine.Engine, svc *Postgres) (*sobek.Object, func()) {
+func installPG(e *engine.Engine, svc *Postgres) (*jsvm.Object, func()) {
 	b := &pgBinding{e: e, vm: e.VM, svc: svc, ctx: context.Background(), conns: map[int64]*pgxpool.Conn{}}
 	o := e.VM.NewObject()
 	_ = o.Set("queryPool", b.queryPool)

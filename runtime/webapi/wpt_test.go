@@ -12,14 +12,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
 	"github.com/moriyoshi/oganesson/internal/gojatarget"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"github.com/moriyoshi/oganesson/runtime/webapi"
 )
@@ -71,7 +72,7 @@ func TestWPT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	harnessProg := sobek.MustCompile("/resources/testharness.js", string(harness), false)
+	harnessProg := jsvm.MustCompile("/resources/testharness.js", string(harness), false)
 	files := collectWPT(t)
 
 	expectPath := filepath.Join("testdata", "wpt-expectations.json")
@@ -221,6 +222,28 @@ type fileTransport struct{ h http.Handler }
 
 func (f fileTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	rec := httptest.NewRecorder()
+	// The FileAPI upload tests send a multipart request to this WPT
+	// endpoint and inspect the bytes it echoes. Run its handler in Go.
+	if r.URL.Path == "/fetch/api/resources/echo-content.py" {
+		rec.Header().Set("Content-Type", "text/plain")
+		rec.Header().Set("X-Request-Method", r.Method)
+		for _, name := range []string{"Content-Length", "Content-Type"} {
+			value := r.Header.Get(name)
+			if name == "Content-Length" && r.ContentLength >= 0 {
+				value = strconv.FormatInt(r.ContentLength, 10)
+			}
+			if value == "" {
+				value = "NO"
+			}
+			rec.Header().Set("X-Request-"+name, value)
+		}
+		if r.Body != nil {
+			if _, err := io.Copy(rec, r.Body); err != nil {
+				return nil, err
+			}
+		}
+		return rec.Result(), nil
+	}
 	f.h.ServeHTTP(rec, r)
 	return rec.Result(), nil
 }
@@ -239,7 +262,7 @@ add_completion_callback(function (tests, status) {
 });
 `
 
-func runWPTFile(t *testing.T, harness *sobek.Program, rel string) wptResult {
+func runWPTFile(t *testing.T, harness *jsvm.Program, rel string) wptResult {
 	m := readMeta(filepath.Join(wptRoot, rel))
 	if m.globals != "" && !strings.Contains(m.globals, "window") && !strings.Contains(m.globals, "worker") && !strings.Contains(m.globals, "shadowrealm") {
 		t.Skipf("globals %q", m.globals)
@@ -272,8 +295,7 @@ func runWPTFile(t *testing.T, harness *sobek.Program, rel string) wptResult {
 		_, err := e.VM.RunScript(name, src)
 		return err
 	}
-	// Test sources go through esbuild with the Goja target, exactly like app
-	// code (e.g. async generators get lowered).
+	// Test sources use the same esbuild profile as app code.
 	runLowered := func(name, src string) error {
 		res := api.Transform(src, gojatarget.TransformOptions(api.LoaderJS, name))
 		if len(res.Errors) > 0 {
@@ -282,7 +304,7 @@ func runWPTFile(t *testing.T, harness *sobek.Program, rel string) wptResult {
 		return run(name, string(res.Code))
 	}
 	harnessErr := ""
-	err = e.Run(ctx, func(vm *sobek.Runtime) error {
+	err = e.Run(ctx, func(vm *jsvm.Runtime) error {
 		if err := run("setup", fmt.Sprintf(wptSetup, base)); err != nil {
 			return err
 		}
@@ -319,7 +341,7 @@ func runWPTFile(t *testing.T, harness *sobek.Program, rel string) wptResult {
 	if err == nil && !done {
 		// The loop went idle with tests still pending: force the harness to
 		// time them out so the remaining subtests report individually.
-		err = e.Run(ctx, func(vm *sobek.Runtime) error { return run("timeout", "timeout()") })
+		err = e.Run(ctx, func(vm *jsvm.Runtime) error { return run("timeout", "timeout()") })
 	}
 	if err != nil && harnessErr == "" && !done {
 		harnessErr = err.Error()

@@ -3,7 +3,7 @@ package isr
 import (
 	"encoding/json"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // The "use cache" store (Next's Cache Components): what Next's default
@@ -44,20 +44,20 @@ func (c *Cache) useCache() *useCacheState {
 }
 
 // installUseCache adds the "use cache" store's functions to og.cache.
-func (c *Cache) installUseCache(vm *sobek.Runtime, o *sobek.Object) {
-	_ = o.Set("useCacheGet", func(key string) sobek.Value {
+func (c *Cache) installUseCache(vm *jsvm.Runtime, o *jsvm.Object) {
+	_ = o.Set("useCacheGet", func(key string) jsvm.Value {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		e := c.useCache().entries[key]
 		if e == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		r := vm.NewObject()
 		_ = r.Set("meta", e.meta)
 		_ = r.Set("body", vm.NewArrayBuffer(append([]byte(nil), e.body...)))
 		return r
 	})
-	_ = o.Set("useCacheSet", func(key, meta string, body sobek.ArrayBuffer) {
+	_ = o.Set("useCacheSet", func(key, meta string, body jsvm.ArrayBuffer) {
 		b := append([]byte(nil), body.Bytes()...)
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -93,7 +93,7 @@ func (c *Cache) installUseCache(vm *sobek.Runtime, o *sobek.Object) {
 	// useCacheUpdateTags is the default handler's updateTags: with
 	// durations, the tags go stale now and expire after expire seconds
 	// (when given); without, they expire now.
-	_ = o.Set("useCacheUpdateTags", func(tags []string, withDurations bool, expire sobek.Value) {
+	_ = o.Set("useCacheUpdateTags", func(tags []string, withDurations bool, expire jsvm.Value) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		now := c.now().UnixMilli()
@@ -107,7 +107,7 @@ func (c *Cache) installUseCache(vm *sobek.Runtime, o *sobek.Object) {
 			if withDurations {
 				stale := now
 				s.Stale = &stale
-				if expire != nil && !sobek.IsUndefined(expire) && !sobek.IsNull(expire) {
+				if expire != nil && !jsvm.IsUndefined(expire) && !jsvm.IsNull(expire) {
 					at := now + int64(expire.ToFloat()*1000)
 					s.Expired = &at
 				}

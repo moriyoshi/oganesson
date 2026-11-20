@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/server"
 	"github.com/moriyoshi/oganesson/runtime/webapi"
 )
@@ -51,7 +51,7 @@ globalThis.__ogHandler = async function (req) {
 
 func newServer(t *testing.T, out io.Writer) *httptest.Server {
 	t.Helper()
-	prog := sobek.MustCompile("app.js", app, false)
+	prog := jsvm.MustCompile("app.js", app, false)
 	h := &server.Handler{
 		Load:   server.ProgramLoader(prog, "__ogHandler"),
 		WebAPI: webapi.Options{Stdout: out},

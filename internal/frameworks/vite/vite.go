@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/moriyoshi/oganesson/internal/gojatarget"
 	"github.com/moriyoshi/oganesson/internal/jshost"
 	"github.com/moriyoshi/oganesson/internal/licenses"
 	"github.com/moriyoshi/oganesson/runtime/app"
@@ -28,6 +29,8 @@ import (
 // Options configure a build.
 type Options struct {
 	Log func(format string, args ...any)
+	// ServerBackend selects the profile for server output. It defaults to the build host's backend.
+	ServerBackend gojatarget.Backend
 
 	licenses *licenses.Collector // npm packages the shipped bundles read
 }
@@ -42,7 +45,7 @@ type Output struct {
 	// Base is Vite's base (the public path the app is served under).
 	Base string
 	// ServerJS is the server environment's entry (a module whose default
-	// export has fetch(request), as TanStack Start's), bundled for Goja;
+	// export has fetch(request), as TanStack Start's), bundled for the runtime;
 	// empty for a client-only app.
 	ServerJS string
 	// Env is environment the server needs at run time (a server program's
@@ -304,7 +307,7 @@ globalThis.__ogResult = (async () => {
 		return nil, err
 	}
 	if serverEntry != "" {
-		if out.ServerJS, err = bundleServer(dir, serverEntry, opts.licenses); err != nil {
+		if out.ServerJS, err = bundleServer(dir, serverEntry, opts); err != nil {
 			return nil, err
 		}
 		opts.Log("vite: server entry %s", serverEntry)

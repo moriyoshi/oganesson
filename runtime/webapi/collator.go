@@ -3,7 +3,7 @@ package webapi
 import (
 	"strings"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"golang.org/x/text/collate"
 	"golang.org/x/text/language"
 )
@@ -15,7 +15,7 @@ import (
 // Punctuation is always significant and caseFirst is the locale's.
 
 func (h *host) installCollator() {
-	h.set("collator", func(locales []string, sensitivity string, numeric bool) sobek.Value {
+	h.set("collator", func(locales []string, sensitivity string, numeric bool) jsvm.Value {
 		tag := language.Und
 		if len(locales) > 0 {
 			matcher := language.NewMatcher(collate.Supported())

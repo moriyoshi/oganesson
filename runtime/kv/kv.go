@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -52,13 +52,13 @@ func Install(e *engine.Engine, store *Store) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), o)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), o)
 	return err
 }
 
 type binding struct {
-	vm    *sobek.Runtime
+	vm    *jsvm.Runtime
 	store *Store
 }
 
@@ -66,7 +66,7 @@ func (h *binding) throw(err error) {
 	panic(h.vm.NewTypeError(err.Error()))
 }
 
-func (h *binding) keyFromJS(v sobek.Value) []KeyPart {
+func (h *binding) keyFromJS(v jsvm.Value) []KeyPart {
 	arr, ok := v.Export().([]any)
 	if !ok {
 		h.throw(fmt.Errorf("kv: key must be an array"))
@@ -89,7 +89,7 @@ func (h *binding) keyFromJS(v sobek.Value) []KeyPart {
 	return out
 }
 
-func (h *binding) keyToJS(key []KeyPart) sobek.Value {
+func (h *binding) keyToJS(key []KeyPart) jsvm.Value {
 	out := make([]any, len(key))
 	for i, p := range key {
 		if b, ok := p.([]byte); ok {
@@ -101,9 +101,9 @@ func (h *binding) keyToJS(key []KeyPart) sobek.Value {
 	return h.vm.ToValue(out)
 }
 
-func (h *binding) valueFromJS(v sobek.Value) Value {
+func (h *binding) valueFromJS(v jsvm.Value) Value {
 	o := v.ToObject(h.vm)
-	if u := o.Get("u64"); u != nil && !sobek.IsUndefined(u) {
+	if u := o.Get("u64"); u != nil && !jsvm.IsUndefined(u) {
 		n, ok := u.Export().(*big.Int)
 		if !ok || n.Sign() < 0 || n.BitLen() > 64 {
 			h.throw(fmt.Errorf("kv: invalid KvU64"))
@@ -117,7 +117,7 @@ func (h *binding) valueFromJS(v sobek.Value) Value {
 	return Value{Data: append([]byte(nil), data...)}
 }
 
-func (h *binding) entryToJS(e Entry) sobek.Value {
+func (h *binding) entryToJS(e Entry) jsvm.Value {
 	r := h.vm.NewObject()
 	_ = r.Set("key", h.keyToJS(e.Key))
 	val := h.vm.NewObject()
@@ -131,35 +131,35 @@ func (h *binding) entryToJS(e Entry) sobek.Value {
 	return r
 }
 
-func (h *binding) get(key sobek.Value) sobek.Value {
+func (h *binding) get(key jsvm.Value) jsvm.Value {
 	e, ok, err := h.store.Get(h.keyFromJS(key))
 	if err != nil {
 		h.throw(err)
 	}
 	if !ok {
-		return sobek.Null()
+		return jsvm.Null()
 	}
 	return h.entryToJS(e)
 }
 
-func (h *binding) list(selV, optsV sobek.Value) sobek.Value {
+func (h *binding) list(selV, optsV jsvm.Value) jsvm.Value {
 	sel := selV.ToObject(h.vm)
 	var s Selector
-	if v := sel.Get("prefix"); v != nil && !sobek.IsUndefined(v) {
+	if v := sel.Get("prefix"); v != nil && !jsvm.IsUndefined(v) {
 		s.Prefix = h.keyFromJS(v)
 		if s.Prefix == nil {
 			s.Prefix = []KeyPart{}
 		}
 	}
-	if v := sel.Get("start"); v != nil && !sobek.IsUndefined(v) {
+	if v := sel.Get("start"); v != nil && !jsvm.IsUndefined(v) {
 		s.Start = h.keyFromJS(v)
 	}
-	if v := sel.Get("end"); v != nil && !sobek.IsUndefined(v) {
+	if v := sel.Get("end"); v != nil && !jsvm.IsUndefined(v) {
 		s.End = h.keyFromJS(v)
 	}
 	o := optsV.ToObject(h.vm)
 	opts := ListOptions{Limit: int(o.Get("limit").ToInteger()), Reverse: o.Get("reverse").ToBoolean()}
-	if c := o.Get("cursor"); c != nil && !sobek.IsUndefined(c) && c.String() != "" {
+	if c := o.Get("cursor"); c != nil && !jsvm.IsUndefined(c) && c.String() != "" {
 		b, err := base64.RawURLEncoding.DecodeString(c.String())
 		if err != nil {
 			h.throw(fmt.Errorf("kv: invalid cursor"))
@@ -184,7 +184,7 @@ func (h *binding) list(selV, optsV sobek.Value) sobek.Value {
 
 var mutationKinds = map[string]MutationKind{"set": MutSet, "delete": MutDelete, "sum": MutSum, "min": MutMin, "max": MutMax}
 
-func (h *binding) commit(checksV, mutsV sobek.Value) sobek.Value {
+func (h *binding) commit(checksV, mutsV jsvm.Value) jsvm.Value {
 	var checks []Check
 	for _, c := range h.objects(checksV) {
 		checks = append(checks, Check{Key: h.keyFromJS(c.Get("key")), Versionstamp: c.Get("versionstamp").String()})
@@ -199,7 +199,7 @@ func (h *binding) commit(checksV, mutsV sobek.Value) sobek.Value {
 		if kind != MutDelete {
 			mut.Value = h.valueFromJS(m.Get("value"))
 		}
-		if ms := m.Get("expireIn"); ms != nil && !sobek.IsUndefined(ms) {
+		if ms := m.Get("expireIn"); ms != nil && !jsvm.IsUndefined(ms) {
 			mut.ExpireIn = time.Duration(ms.ToFloat() * float64(time.Millisecond))
 		}
 		muts = append(muts, mut)
@@ -216,13 +216,13 @@ func (h *binding) commit(checksV, mutsV sobek.Value) sobek.Value {
 	return r
 }
 
-func (h *binding) objects(v sobek.Value) []*sobek.Object {
-	if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+func (h *binding) objects(v jsvm.Value) []*jsvm.Object {
+	if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 		return nil
 	}
 	arr := v.ToObject(h.vm)
 	n := int(arr.Get("length").ToInteger())
-	out := make([]*sobek.Object, n)
+	out := make([]*jsvm.Object, n)
 	for i := 0; i < n; i++ {
 		out[i] = arr.Get(fmt.Sprint(i)).ToObject(h.vm)
 	}

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -115,7 +115,7 @@ func (o *esbuildOptions) jsx() api.JSX {
 	return api.JSXTransform
 }
 
-func messages(vm *sobek.Runtime, ms []api.Message) []any {
+func messages(vm *jsvm.Runtime, ms []api.Message) []any {
 	out := make([]any, 0, len(ms))
 	for _, m := range ms {
 		r := map[string]any{"id": m.ID, "pluginName": m.PluginName, "text": m.Text, "location": nil, "notes": []any{}, "detail": nil}
@@ -132,7 +132,7 @@ func installEsbuild(e *engine.Engine) error {
 	vm := e.VM
 	o := vm.NewObject()
 	_ = o.Set("version", esbuildVersion())
-	_ = o.Set("transform", func(code, optsJSON string) sobek.Value {
+	_ = o.Set("transform", func(code, optsJSON string) jsvm.Value {
 		var opts esbuildOptions
 		if err := json.Unmarshal([]byte(optsJSON), &opts); err != nil {
 			panic(vm.NewGoError(err))
@@ -154,7 +154,7 @@ func installEsbuild(e *engine.Engine) error {
 		res := api.Transform(code, to)
 		return vm.ToValue(map[string]any{"code": string(res.Code), "map": string(res.Map), "errors": messages(vm, res.Errors), "warnings": messages(vm, res.Warnings)})
 	})
-	_ = o.Set("build", func(optsJSON string) sobek.Value {
+	_ = o.Set("build", func(optsJSON string) jsvm.Value {
 		var opts esbuildOptions
 		if err := json.Unmarshal([]byte(optsJSON), &opts); err != nil {
 			panic(vm.NewGoError(err))

@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"github.com/moriyoshi/oganesson/runtime/webapi"
 )
@@ -59,8 +59,8 @@ func runPrismaMigrate(files fs.FS, meta *Meta, webAPI webapi.Options, exts []fun
 		}
 	}
 
-	var done sobek.Value
-	err = e.Run(ctx, func(vm *sobek.Runtime) error {
+	var done jsvm.Value
+	err = e.Run(ctx, func(vm *jsvm.Runtime) error {
 		cfg := vm.NewObject()
 		_ = cfg.Set("dir", pm.Dir)
 		_ = cfg.Set("url", url)
@@ -80,7 +80,7 @@ func runPrismaMigrate(files fs.FS, meta *Meta, webAPI webapi.Options, exts []fun
 	if err != nil {
 		return err
 	}
-	if done == nil || sobek.IsUndefined(done) {
+	if done == nil || jsvm.IsUndefined(done) {
 		return fmt.Errorf("migrator program did not start")
 	}
 	result, err := e.Await(ctx, done)

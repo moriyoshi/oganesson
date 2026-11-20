@@ -37,7 +37,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -59,14 +59,14 @@ type Options struct {
 
 // Runtime is the WebAssembly support installed on one Goja runtime.
 type Runtime struct {
-	vm     *sobek.Runtime
+	vm     *jsvm.Runtime
 	r      wazero.Runtime // created on first use (see wz)
 	rOnce  sync.Once
 	cfg    wazero.RuntimeConfig
 	ctx    context.Context
 	cancel context.CancelFunc
 	opts   Options
-	handle *sobek.Symbol
+	handle *jsvm.Symbol
 	start  time.Time
 
 	seq      atomic.Int64
@@ -77,14 +77,14 @@ type Runtime struct {
 
 	// refs holds the JS values passed into wasm as externref (handle 0 is
 	// null); nextRef is the next handle.
-	refs    map[uint64]sobek.Value
+	refs    map[uint64]jsvm.Value
 	nextRef uint64
 
 	// pending holds JS exceptions thrown from imports while wasm runs, one
 	// slot per nested call from JS into wasm.
-	pending []*sobek.Exception
+	pending []*jsvm.Exception
 
-	errCompile, errLink, errRuntime sobek.Value
+	errCompile, errLink, errRuntime jsvm.Value
 }
 
 var cache = func() wazero.CompilationCache {
@@ -98,7 +98,7 @@ var cache = func() wazero.CompilationCache {
 
 // Install defines globalThis.WebAssembly on vm. Call Close to release the
 // runtime.
-func Install(vm *sobek.Runtime, opts Options) (*Runtime, error) {
+func Install(vm *jsvm.Runtime, opts Options) (*Runtime, error) {
 	if opts.Stderr == nil {
 		opts.Stderr = os.Stderr
 	}
@@ -109,40 +109,40 @@ func Install(vm *sobek.Runtime, opts Options) (*Runtime, error) {
 		WithCloseOnContextDone(true)
 	rt := &Runtime{
 		vm: vm, cfg: cfg, ctx: ctx, cancel: cancel, opts: opts,
-		handle: sobek.NewSymbol("og.wasm.handle"), memories: map[api.Memory]*memory{}, start: time.Now(),
+		handle: jsvm.NewSymbol("og.wasm.handle"), memories: map[api.Memory]*memory{}, start: time.Now(),
 	}
 	native := vm.NewObject()
-	set := func(name string, fn func(sobek.FunctionCall) sobek.Value) { _ = native.Set(name, fn) }
-	set("setErrors", func(c sobek.FunctionCall) sobek.Value {
+	set := func(name string, fn func(jsvm.FunctionCall) jsvm.Value) { _ = native.Set(name, fn) }
+	set("setErrors", func(c jsvm.FunctionCall) jsvm.Value {
 		rt.errCompile, rt.errLink, rt.errRuntime = c.Argument(0), c.Argument(1), c.Argument(2)
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
 	set("compile", rt.jsCompile)
 	set("moduleImports", rt.jsModuleImports)
 	set("moduleExports", rt.jsModuleExports)
 	set("instantiate", rt.jsInstantiate)
 	set("newMemory", rt.jsNewMemory)
-	set("memoryBuffer", func(c sobek.FunctionCall) sobek.Value { return rt.memoryOf(c.Argument(0)).buffer() })
+	set("memoryBuffer", func(c jsvm.FunctionCall) jsvm.Value { return rt.memoryOf(c.Argument(0)).buffer() })
 	set("memoryGrow", rt.jsMemoryGrow)
 	set("tableGet", rt.jsTableGet)
 	set("tableSet", rt.jsTableSet)
 	set("tableGrow", rt.jsTableGrow)
-	set("tableLength", func(c sobek.FunctionCall) sobek.Value { return vm.ToValue(rt.tableOf(c.Argument(0)).length()) })
-	set("globalGet", func(c sobek.FunctionCall) sobek.Value { return rt.globalOf(c.Argument(0)).get(vm) })
-	set("globalSet", func(c sobek.FunctionCall) sobek.Value {
+	set("tableLength", func(c jsvm.FunctionCall) jsvm.Value { return vm.ToValue(rt.tableOf(c.Argument(0)).length()) })
+	set("globalGet", func(c jsvm.FunctionCall) jsvm.Value { return rt.globalOf(c.Argument(0)).get(vm) })
+	set("globalSet", func(c jsvm.FunctionCall) jsvm.Value {
 		rt.globalOf(c.Argument(0)).set(rt, c.Argument(1))
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	})
 	if !opts.Restricted {
-		set("wasi", func(sobek.FunctionCall) sobek.Value { return rt.marker(&wasiMarker{}) })
+		set("wasi", func(jsvm.FunctionCall) jsvm.Value { return rt.marker(&wasiMarker{}) })
 		set("native", rt.jsNative)
 	}
 	fn, err := vm.RunScript("og-wasm.js", shimSource)
 	if err != nil {
 		return nil, err
 	}
-	install, _ := sobek.AssertFunction(fn)
-	if _, err := install(sobek.Undefined(), native, rt.handle); err != nil {
+	install, _ := jsvm.AssertFunction(fn)
+	if _, err := install(jsvm.Undefined(), native, rt.handle); err != nil {
 		return nil, err
 	}
 	return rt, nil
@@ -228,8 +228,8 @@ const threadStopTimeout = 2 * time.Second
 
 // --- handles ------------------------------------------------------------------
 
-func (rt *Runtime) throw(ctor sobek.Value, msg string) {
-	if c, ok := sobek.AssertConstructor(ctor); ok {
+func (rt *Runtime) throw(ctor jsvm.Value, msg string) {
+	if c, ok := jsvm.AssertConstructor(ctor); ok {
 		if obj, err := c(nil, rt.vm.ToValue(msg)); err == nil {
 			panic(obj)
 		}
@@ -237,8 +237,8 @@ func (rt *Runtime) throw(ctor sobek.Value, msg string) {
 	panic(rt.vm.NewGoError(errors.New(msg)))
 }
 
-func (rt *Runtime) handleOf(v sobek.Value) any {
-	if obj, ok := v.(*sobek.Object); ok {
+func (rt *Runtime) handleOf(v jsvm.Value) any {
+	if obj, ok := v.(*jsvm.Object); ok {
 		if h := obj.GetSymbol(rt.handle); h != nil {
 			return h.Export()
 		}
@@ -247,15 +247,15 @@ func (rt *Runtime) handleOf(v sobek.Value) any {
 }
 
 // marker is an object carrying a native value under the handle symbol.
-func (rt *Runtime) marker(v any) sobek.Value {
+func (rt *Runtime) marker(v any) jsvm.Value {
 	obj := rt.vm.NewObject()
 	_ = obj.SetSymbol(rt.handle, rt.vm.ToValue(v))
 	return obj
 }
 
-func bytesOf(v sobek.Value) ([]byte, bool) {
+func bytesOf(v jsvm.Value) ([]byte, bool) {
 	switch b := v.Export().(type) {
-	case sobek.ArrayBuffer:
+	case jsvm.ArrayBuffer:
 		return b.Bytes(), true
 	case []byte:
 		return b, true
@@ -270,7 +270,7 @@ type module struct {
 	info     *moduleInfo
 }
 
-func (rt *Runtime) jsCompile(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsCompile(c jsvm.FunctionCall) jsvm.Value {
 	b, ok := bytesOf(c.Argument(0))
 	if !ok {
 		panic(rt.vm.NewTypeError("WebAssembly.Module: argument must be a buffer source"))
@@ -295,7 +295,7 @@ func (rt *Runtime) jsCompile(c sobek.FunctionCall) sobek.Value {
 
 var kindNames = map[byte]string{kindFunc: "function", kindTable: "table", kindMemory: "memory", kindGlobal: "global"}
 
-func (rt *Runtime) jsModuleImports(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsModuleImports(c jsvm.FunctionCall) jsvm.Value {
 	m := c.Argument(0).Export().(*module)
 	out := make([]any, 0, len(m.info.imports))
 	for _, im := range m.info.imports {
@@ -311,7 +311,7 @@ func (rt *Runtime) jsModuleImports(c sobek.FunctionCall) sobek.Value {
 	return rt.vm.ToValue(out)
 }
 
-func (rt *Runtime) jsModuleExports(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsModuleExports(c jsvm.FunctionCall) jsvm.Value {
 	m := c.Argument(0).Export().(*module)
 	var out []any
 	for name, fn := range m.compiled.ExportedFunctions() {
@@ -343,7 +343,7 @@ type instance struct {
 	mod      api.Module
 	config   wazero.ModuleConfig
 	resolved map[string]api.Module
-	slots    map[uint32]sobek.Value
+	slots    map[uint32]jsvm.Value
 }
 
 func (in *instance) resolve(name string) api.Module { return in.resolved[name] }
@@ -353,17 +353,17 @@ type threadKey struct{}
 func isThread(ctx context.Context) bool { return ctx.Value(threadKey{}) != nil }
 
 // jsInstantiate(moduleHandle, importObject, wrapMemory, wrapTable, wrapGlobal) -> exports
-func (rt *Runtime) jsInstantiate(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsInstantiate(c jsvm.FunctionCall) jsvm.Value {
 	m, _ := c.Argument(0).Export().(*module)
 	if m == nil {
 		panic(rt.vm.NewTypeError("WebAssembly.Instance: argument must be a WebAssembly.Module"))
 	}
-	importObj, _ := c.Argument(1).(*sobek.Object)
-	wrapMemory, _ := sobek.AssertFunction(c.Argument(2))
-	wrapTable, _ := sobek.AssertFunction(c.Argument(3))
-	wrapGlobal, _ := sobek.AssertFunction(c.Argument(4))
+	importObj, _ := c.Argument(1).(*jsvm.Object)
+	wrapMemory, _ := jsvm.AssertFunction(c.Argument(2))
+	wrapTable, _ := jsvm.AssertFunction(c.Argument(3))
+	wrapGlobal, _ := jsvm.AssertFunction(c.Argument(4))
 
-	in := &instance{rt: rt, module: m, resolved: map[string]api.Module{}, slots: map[uint32]sobek.Value{}}
+	in := &instance{rt: rt, module: m, resolved: map[string]api.Module{}, slots: map[uint32]jsvm.Value{}}
 	// Group imports by module name, in order.
 	var names []string
 	groups := map[string][]importEntry{}
@@ -374,9 +374,9 @@ func (rt *Runtime) jsInstantiate(c sobek.FunctionCall) sobek.Value {
 		groups[im.module] = append(groups[im.module], im)
 	}
 	for _, name := range names {
-		var ns *sobek.Object
+		var ns *jsvm.Object
 		if importObj != nil {
-			ns, _ = importObj.Get(name).(*sobek.Object)
+			ns, _ = importObj.Get(name).(*jsvm.Object)
 		}
 		if ns == nil {
 			rt.throw(rt.errLink, fmt.Sprintf("WebAssembly.Instance: import namespace %q is missing", name))
@@ -437,11 +437,11 @@ func (rt *Runtime) jsInstantiate(c sobek.FunctionCall) sobek.Value {
 			if int(ti) < len(m.info.tables) {
 				elem = m.info.tables[ti]
 			}
-			v, _ := wrapTable(sobek.Undefined(), rt.vm.ToValue(&table{in: in, idx: ti, elem: elem}))
+			v, _ := wrapTable(jsvm.Undefined(), rt.vm.ToValue(&table{in: in, idx: ti, elem: elem}))
 			_ = exports.Set(name, v)
 		case kindGlobal:
 			if g := mod.ExportedGlobal(name); g != nil && wrapGlobal != nil {
-				v, _ := wrapGlobal(sobek.Undefined(), rt.vm.ToValue(&global{g: g}))
+				v, _ := wrapGlobal(jsvm.Undefined(), rt.vm.ToValue(&global{g: g}))
 				_ = exports.Set(name, v)
 			}
 		}
@@ -465,7 +465,7 @@ func (rt *Runtime) finishCall(err error) {
 
 // glue instantiates the module that serves one import namespace: JS
 // functions through a host module, memories from their providers.
-func (rt *Runtime) glue(in *instance, name string, ns *sobek.Object, entries []importEntry) (api.Module, error) {
+func (rt *Runtime) glue(in *instance, name string, ns *jsvm.Object, entries []importEntry) (api.Module, error) {
 	id := rt.seq.Add(1)
 	hostName := fmt.Sprintf("og.host.%d", id)
 	host := rt.wz().NewHostModuleBuilder(hostName)
@@ -510,7 +510,7 @@ func valueTypes(b []byte) []api.ValueType {
 }
 
 // bindImport turns an import value into a host function.
-func (rt *Runtime) bindImport(in *instance, what string, v sobek.Value, t funcType) (api.GoModuleFunction, error) {
+func (rt *Runtime) bindImport(in *instance, what string, v jsvm.Value, t funcType) (api.GoModuleFunction, error) {
 	switch h := rt.handleOf(v).(type) {
 	case *nativeFunc:
 		return rt.nativeImpl(in, h.name)
@@ -524,7 +524,7 @@ func (rt *Runtime) bindImport(in *instance, what string, v sobek.Value, t funcTy
 			copy(stack, res)
 		}), nil
 	}
-	call, ok := sobek.AssertFunction(v)
+	call, ok := jsvm.AssertFunction(v)
 	if !ok {
 		return nil, fmt.Errorf("WebAssembly.Instance: import %s must be callable", what)
 	}
@@ -533,14 +533,14 @@ func (rt *Runtime) bindImport(in *instance, what string, v sobek.Value, t funcTy
 			panic(fmt.Errorf("wasm: JS import %s called from a wasm thread", what))
 		}
 		rt.refreshMemories()
-		args := make([]sobek.Value, len(t.params))
+		args := make([]jsvm.Value, len(t.params))
 		for i, p := range t.params {
 			args[i] = rt.fromWasm(p, stack[i])
 		}
-		res, err := call(sobek.Undefined(), args...)
+		res, err := call(jsvm.Undefined(), args...)
 		if err != nil {
 			// Unwind the wasm stack; the caller rethrows the JS exception.
-			var exc *sobek.Exception
+			var exc *jsvm.Exception
 			if errors.As(err, &exc) && len(rt.pending) > 0 {
 				rt.pending[len(rt.pending)-1] = exc
 			}
@@ -551,7 +551,7 @@ func (rt *Runtime) bindImport(in *instance, what string, v sobek.Value, t funcTy
 		case 1:
 			stack[0] = rt.toWasm(t.results[0], res)
 		default:
-			arr, _ := res.(*sobek.Object)
+			arr, _ := res.(*jsvm.Object)
 			for i, r := range t.results {
 				if arr != nil {
 					stack[i] = rt.toWasm(r, arr.Get(fmt.Sprint(i)))
@@ -565,10 +565,10 @@ func (rt *Runtime) bindImport(in *instance, what string, v sobek.Value, t funcTy
 // elsewhere, it is linked directly).
 type exportedFunc struct{ fn api.Function }
 
-func (rt *Runtime) wrapFunc(fn api.Function, name string) sobek.Value {
+func (rt *Runtime) wrapFunc(fn api.Function, name string) jsvm.Value {
 	def := fn.Definition()
 	params, results := def.ParamTypes(), def.ResultTypes()
-	f := rt.vm.ToValue(func(c sobek.FunctionCall) sobek.Value {
+	f := rt.vm.ToValue(func(c jsvm.FunctionCall) jsvm.Value {
 		args := make([]uint64, len(params))
 		for i, p := range params {
 			args[i] = rt.toWasm(byte(p), c.Argument(i))
@@ -578,7 +578,7 @@ func (rt *Runtime) wrapFunc(fn api.Function, name string) sobek.Value {
 		rt.finishCall(err)
 		switch len(results) {
 		case 0:
-			return sobek.Undefined()
+			return jsvm.Undefined()
 		case 1:
 			return rt.fromWasm(byte(results[0]), res[0])
 		}
@@ -587,14 +587,14 @@ func (rt *Runtime) wrapFunc(fn api.Function, name string) sobek.Value {
 			out[i] = rt.fromWasm(byte(r), res[i])
 		}
 		return rt.vm.ToValue(out)
-	}).(*sobek.Object)
-	_ = f.DefineDataProperty("name", rt.vm.ToValue(name), sobek.FLAG_FALSE, sobek.FLAG_FALSE, sobek.FLAG_TRUE)
-	_ = f.DefineDataProperty("length", rt.vm.ToValue(len(params)), sobek.FLAG_FALSE, sobek.FLAG_FALSE, sobek.FLAG_TRUE)
+	}).(*jsvm.Object)
+	_ = f.DefineDataProperty("name", rt.vm.ToValue(name), jsvm.FLAG_FALSE, jsvm.FLAG_FALSE, jsvm.FLAG_TRUE)
+	_ = f.DefineDataProperty("length", rt.vm.ToValue(len(params)), jsvm.FLAG_FALSE, jsvm.FLAG_FALSE, jsvm.FLAG_TRUE)
 	_ = f.SetSymbol(rt.handle, rt.vm.ToValue(&exportedFunc{fn: fn}))
 	return f
 }
 
-func (rt *Runtime) toWasm(t byte, v sobek.Value) uint64 {
+func (rt *Runtime) toWasm(t byte, v jsvm.Value) uint64 {
 	switch api.ValueType(t) {
 	case api.ValueTypeI32:
 		return uint64(uint32(int32(v.ToInteger())))
@@ -615,7 +615,7 @@ func (rt *Runtime) toWasm(t byte, v sobek.Value) uint64 {
 	panic(rt.vm.NewTypeError(fmt.Sprintf("WebAssembly: unsupported value type %#x", t)))
 }
 
-func (rt *Runtime) fromWasm(t byte, x uint64) sobek.Value {
+func (rt *Runtime) fromWasm(t byte, x uint64) jsvm.Value {
 	switch api.ValueType(t) {
 	case api.ValueTypeI32:
 		return rt.vm.ToValue(int32(uint32(x)))
@@ -627,26 +627,26 @@ func (rt *Runtime) fromWasm(t byte, x uint64) sobek.Value {
 		return rt.vm.ToValue(api.DecodeF64(x))
 	case api.ValueTypeExternref:
 		if x == 0 {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		if v, ok := rt.refs[x]; ok {
 			return v
 		}
-		return sobek.Undefined()
+		return jsvm.Undefined()
 	}
-	return sobek.Undefined()
+	return jsvm.Undefined()
 }
 
 // externref is the handle of a JS value passed into wasm as externref:
 // null is the null reference; anything else (undefined included) gets a
 // handle that maps back to the same value. Handles are kept for the
 // runtime's life (no finalization).
-func (rt *Runtime) externref(v sobek.Value) uint64 {
-	if v == nil || sobek.IsNull(v) {
+func (rt *Runtime) externref(v jsvm.Value) uint64 {
+	if v == nil || jsvm.IsNull(v) {
 		return 0
 	}
 	if rt.refs == nil {
-		rt.refs = map[uint64]sobek.Value{}
+		rt.refs = map[uint64]jsvm.Value{}
 	}
 	rt.nextRef++
 	rt.refs[rt.nextRef] = v
@@ -659,15 +659,15 @@ type memory struct {
 	rt             *Runtime
 	mem            api.Memory
 	module, export string // where wasm modules import it from
-	obj            *sobek.Object
-	ab             *sobek.ArrayBuffer
+	obj            *jsvm.Object
+	ab             *jsvm.ArrayBuffer
 	abLen          uint32
 }
 
 // jsNewMemory(initial, maximum, shared, obj) -> handle
-func (rt *Runtime) jsNewMemory(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsNewMemory(c jsvm.FunctionCall) jsvm.Value {
 	l := limits{min: uint32(c.Argument(0).ToInteger()), shared: c.Argument(2).ToBoolean()}
-	if mx := c.Argument(1); !sobek.IsUndefined(mx) {
+	if mx := c.Argument(1); !jsvm.IsUndefined(mx) {
 		l.max, l.hasMax = uint32(mx.ToInteger()), true
 	}
 	if l.shared && !l.hasMax {
@@ -682,28 +682,28 @@ func (rt *Runtime) jsNewMemory(c sobek.FunctionCall) sobek.Value {
 	if err != nil {
 		panic(rt.vm.NewGoError(err))
 	}
-	m := &memory{rt: rt, mem: mod.ExportedMemory("memory"), module: name, export: "memory", obj: c.Argument(3).(*sobek.Object)}
+	m := &memory{rt: rt, mem: mod.ExportedMemory("memory"), module: name, export: "memory", obj: c.Argument(3).(*jsvm.Object)}
 	rt.memories[m.mem] = m
 	return rt.vm.ToValue(m)
 }
 
 // memoryObject returns the JS object for an exported memory (the same
 // object for the same memory, e.g. a re-exported import).
-func (rt *Runtime) memoryObject(mem api.Memory, module, export string, wrap sobek.Callable) sobek.Value {
+func (rt *Runtime) memoryObject(mem api.Memory, module, export string, wrap jsvm.Callable) jsvm.Value {
 	if m, ok := rt.memories[mem]; ok {
 		return m.obj
 	}
 	m := &memory{rt: rt, mem: mem, module: module, export: export}
 	rt.memories[mem] = m
-	v, err := wrap(sobek.Undefined(), rt.vm.ToValue(m))
+	v, err := wrap(jsvm.Undefined(), rt.vm.ToValue(m))
 	if err != nil {
 		panic(err)
 	}
-	m.obj = v.(*sobek.Object)
+	m.obj = v.(*jsvm.Object)
 	return v
 }
 
-func (rt *Runtime) memoryOf(v sobek.Value) *memory {
+func (rt *Runtime) memoryOf(v jsvm.Value) *memory {
 	m, ok := v.Export().(*memory)
 	if !ok {
 		panic(rt.vm.NewTypeError("not a WebAssembly.Memory"))
@@ -711,14 +711,14 @@ func (rt *Runtime) memoryOf(v sobek.Value) *memory {
 	return m
 }
 
-func (m *memory) buffer() sobek.Value {
+func (m *memory) buffer() jsvm.Value {
 	size := m.mem.Size()
 	if m.ab != nil && m.abLen == size {
 		return m.rt.vm.ToValue(*m.ab)
 	}
 	m.detach()
 	view, _ := m.mem.Read(0, size)
-	ab := m.rt.vm.NewArrayBuffer(view)
+	ab := jsvm.WrapArrayBuffer(m.rt.vm, view)
 	m.ab, m.abLen = &ab, size
 	return m.rt.vm.ToValue(ab)
 }
@@ -730,7 +730,7 @@ func (m *memory) detach() {
 	}
 }
 
-func (rt *Runtime) jsMemoryGrow(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsMemoryGrow(c jsvm.FunctionCall) jsvm.Value {
 	m := rt.memoryOf(c.Argument(0))
 	prev, ok := m.mem.Grow(uint32(c.Argument(1).ToInteger()))
 	if !ok {
@@ -756,7 +756,7 @@ func (rt *Runtime) refreshMemories() {
 // global is an exported WebAssembly.Global.
 type global struct{ g api.Global }
 
-func (rt *Runtime) globalOf(v sobek.Value) *global {
+func (rt *Runtime) globalOf(v jsvm.Value) *global {
 	g, ok := v.Export().(*global)
 	if !ok {
 		panic(rt.vm.NewTypeError("not a WebAssembly.Global"))
@@ -766,7 +766,7 @@ func (rt *Runtime) globalOf(v sobek.Value) *global {
 
 // get converts the value by type: i32 and f32/f64 as numbers, i64 as a
 // BigInt (the JS API's ToJSValue).
-func (g *global) get(vm *sobek.Runtime) sobek.Value {
+func (g *global) get(vm *jsvm.Runtime) jsvm.Value {
 	v := g.g.Get()
 	switch g.g.Type() {
 	case api.ValueTypeI32:
@@ -778,10 +778,10 @@ func (g *global) get(vm *sobek.Runtime) sobek.Value {
 	case api.ValueTypeF64:
 		return vm.ToValue(math.Float64frombits(v))
 	}
-	return sobek.Undefined()
+	return jsvm.Undefined()
 }
 
-func (g *global) set(rt *Runtime, v sobek.Value) {
+func (g *global) set(rt *Runtime, v jsvm.Value) {
 	mg, ok := g.g.(api.MutableGlobal)
 	if !ok {
 		panic(rt.vm.NewTypeError("WebAssembly.Global: can't set the value of an immutable global"))
@@ -816,7 +816,7 @@ func (t *table) accessor(op string) api.Function {
 	return t.in.mod.ExportedFunction(tableAccessor(op, t.idx))
 }
 
-func (rt *Runtime) tableOf(v sobek.Value) *table {
+func (rt *Runtime) tableOf(v jsvm.Value) *table {
 	t, ok := v.Export().(*table)
 	if !ok {
 		panic(rt.vm.NewTypeError("not a WebAssembly.Table"))
@@ -839,7 +839,7 @@ func (t *table) length() uint32 {
 	return n
 }
 
-func (rt *Runtime) jsTableGet(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsTableGet(c jsvm.FunctionCall) jsvm.Value {
 	t := rt.tableOf(c.Argument(0))
 	slot := uint32(c.Argument(1).ToInteger())
 	if t.elem == refExtern {
@@ -850,11 +850,11 @@ func (rt *Runtime) jsTableGet(c sobek.FunctionCall) sobek.Value {
 	}
 	fn, ok := t.in.module.info.slots[slot]
 	if !ok {
-		return sobek.Null()
+		return jsvm.Null()
 	}
 	f := t.in.mod.ExportedFunction(slotExport(fn))
 	if f == nil {
-		return sobek.Null()
+		return jsvm.Null()
 	}
 	v := rt.wrapFunc(f, fmt.Sprint(fn))
 	t.in.slots[slot] = v
@@ -862,17 +862,17 @@ func (rt *Runtime) jsTableGet(c sobek.FunctionCall) sobek.Value {
 }
 
 // jsTableSet(table, index, value): an externref table's slot.
-func (rt *Runtime) jsTableSet(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsTableSet(c jsvm.FunctionCall) jsvm.Value {
 	t := rt.tableOf(c.Argument(0))
 	if t.elem != refExtern {
 		panic(rt.vm.NewTypeError("WebAssembly.Table.set: only externref tables can be set"))
 	}
 	rt.tableCall(t, "set", uint64(uint32(c.Argument(1).ToInteger())), rt.externref(c.Argument(2)))
-	return sobek.Undefined()
+	return jsvm.Undefined()
 }
 
 // jsTableGrow(table, delta, init): grows the table; the previous length.
-func (rt *Runtime) jsTableGrow(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsTableGrow(c jsvm.FunctionCall) jsvm.Value {
 	t := rt.tableOf(c.Argument(0))
 	delta := uint32(c.Argument(1).ToInteger())
 	old := int32(uint32(rt.tableCall(t, "grow", uint64(delta))[0]))
@@ -936,7 +936,7 @@ var emnapiTrapped = []string{
 	"_emnapi_async_send_js", "_emnapi_set_immediate",
 }
 
-func (rt *Runtime) jsNative(c sobek.FunctionCall) sobek.Value {
+func (rt *Runtime) jsNative(c jsvm.FunctionCall) jsvm.Value {
 	set := c.Argument(0).String()
 	names, ok := nativeSets[set]
 	if !ok {

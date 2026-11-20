@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"github.com/moriyoshi/oganesson/runtime/webapi"
 )
@@ -38,7 +38,7 @@ func eval(t *testing.T, opts webapi.Options, body string) string {
 	if err != nil {
 		t.Fatalf("%v\nstdout: %s", err, out.String())
 	}
-	if sobek.IsUndefined(res) {
+	if jsvm.IsUndefined(res) {
 		return out.String()
 	}
 	return res.String()
@@ -77,6 +77,19 @@ func TestEncoding(t *testing.T) {
 		catch (e) { return e.name; }
 	`), "TypeError")
 	check(t, "base64", eval(t, webapi.Options{}, `return btoa("hello") + ":" + atob(" aGVs bG8= ");`), "aGVsbG8=:hello")
+}
+
+func TestHostBytesInByteStream(t *testing.T) {
+	check(t, "encoded response", eval(t, webapi.Options{}, `
+		const stream = new ReadableStream({
+			type: "bytes",
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("héllo"));
+				controller.close();
+			}
+		});
+		return await new Response(stream).text();
+	`), "héllo")
 }
 
 func TestURL(t *testing.T) {

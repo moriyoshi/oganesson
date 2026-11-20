@@ -9,11 +9,18 @@ import (
 	"github.com/microsoft/TypeScript/tsc/ogapi"
 )
 
-// Finish applies the fixups every bundle built for the engine (Sobek, which
-// shares these Goja bugs) needs after esbuild: QuoteKeywordClassFields,
-// HoistDefaultedArrayPatterns, HoldArrowArguments and ContextualThenables.
+// Finish applies post-esbuild fixups for the built backend.
 func Finish(code string) string {
-	return LoweredAsyncIteratorPrototype(ContextualThenables(HoldArrowArguments(HoistDefaultedArrayPatterns(QuoteKeywordClassFields(code)))))
+	return backend.Finish(code)
+}
+
+// Finish applies post-esbuild fixups for b.
+func (b Backend) Finish(code string) string {
+	if b.resolved() == Sobek {
+		code = ContextualThenables(HoldArrowArguments(HoistDefaultedArrayPatterns(QuoteKeywordClassFields(code))))
+	}
+	// An intermediate build can already have lowered async generators.
+	return LoweredAsyncIteratorPrototype(code)
 }
 
 // defaultedArrayPatternRe is a cheap precondition of

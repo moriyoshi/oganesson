@@ -10,23 +10,23 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 	"github.com/moriyoshi/oganesson/runtime/webapi"
 )
 
 // LoadFunc evaluates the application in a fresh engine and returns its fetch
 // handler: (request: Request) => Response | Promise<Response>.
-type LoadFunc func(e *engine.Engine) (sobek.Callable, error)
+type LoadFunc func(e *engine.Engine) (jsvm.Callable, error)
 
 // ProgramLoader returns a LoadFunc that runs a precompiled script and reads
 // the handler from the global named export (e.g. "__ogHandler").
-func ProgramLoader(p *sobek.Program, export string) LoadFunc {
-	return func(e *engine.Engine) (sobek.Callable, error) {
+func ProgramLoader(p *jsvm.Program, export string) LoadFunc {
+	return func(e *engine.Engine) (jsvm.Callable, error) {
 		if _, err := e.VM.RunProgram(p); err != nil {
 			return nil, err
 		}
-		fn, ok := sobek.AssertFunction(e.VM.Get(export))
+		fn, ok := jsvm.AssertFunction(e.VM.Get(export))
 		if !ok {
 			return nil, fmt.Errorf("server: global %q is not a function", export)
 		}
@@ -77,7 +77,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// A JS exception's message carries only its first frame; the log
 		// gets the whole stack.
 		var detail any = err
-		if ex := (*sobek.Exception)(nil); errors.As(err, &ex) {
+		if ex := (*jsvm.Exception)(nil); errors.As(err, &ex) {
 			detail = ex.String()
 		}
 		log.Error("request failed", "stage", stage, "error", detail)
@@ -109,11 +109,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Client went away: abort the request signal on the loop goroutine.
 	stop := context.AfterFunc(r.Context(), func() {
-		e.Loop.Post(func(*sobek.Runtime) error { abort(); return nil })
+		e.Loop.Post(func(*jsvm.Runtime) error { abort(); return nil })
 	})
 	defer stop()
 
-	ret, err := handler(sobek.Undefined(), req)
+	ret, err := handler(jsvm.Undefined(), req)
 	if err != nil {
 		fail("handler", err, false)
 		return

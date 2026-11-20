@@ -593,3 +593,229 @@ Added `og version`, which prints the Oganesson version the CLI corresponds to, a
 - Files: `cmd/og/version.go` (`ogVersion`, `runVersion`, `writeVersion`), `cmd/og/main.go` (command entry), `cmd/og/version_test.go`.
 - Tests: `TestOgVersionPrefersInjected` (injected version wins), `TestOgVersionFallsBack` (non-empty with no injection), `TestWriteVersion` (output contains the version, `goos/goarch`, Go version, and is newline-terminated). Neutralized by dropping the trailing `\n` from the format string: `TestWriteVersion` fails with "not newline-terminated" — a behavioral failure, not a compile error.
 - Docs: added to the CLI command listing and the `cmd/og` row in ARCHITECTURE.md.
+
+## Ekuma backend integration · 2026-11-20
+
+`OG_ENGINE=ekuma scripts/build-og.sh .agents-workspace/tmp/og-ekuma` selects Ekuma
+for the CLI's build host and packaged server. The slim runtime and native
+module packaging paths carry the same build tag when they invoke Go. The
+boundary lives in `internal/jsvm`, and the vendored CommonJS loader builds
+against that boundary. The default remains Sobek.
+
+The Ekuma backend pins `12ccee101031`. It binds reusable scripts in each VM,
+settles host promises with native resolvers, and propagates AsyncLocalStorage
+through scoped continuation data. Ordinary buffers use JavaScript-managed
+storage so the Web Streams polyfill can transfer them. WebAssembly memory
+views wrap live wazero memory and detach on growth. The byte-stream regression
+test fails with the original host-only buffer and passes with the transferable
+buffer. Ekuma uses its own RegExp, Intl, and Proxy behavior. CommonJS still uses
+the existing loader, and the host calls captured JavaScript intrinsics for
+property descriptors and keys.
+
+The Vite binding facade exposes known exports as own properties so the
+Rolldown interop wrapper copies them. A webpack loader that requests a callback
+and rejects its returned promise now produces a build error. The plugin
+bridge also reports when its event loop stops before a call settles.
+
+Both engines passed build and vet. The Go suites passed outside the Next
+package on both engines. The root Next suite needs the installed fixture.
+`OG_TEST_APPS` points the separate integration runs at the prepared copy under
+`.agents-workspace/tmp/ekuma-fixtures`. The full feature fixture builds on both
+engines, including Tailwind oxide, Sass, and Next font loaders. Both engines
+initially reported the same missing oxide binding. Installing the fixture's
+exact oxide wasm32-wasi version in the temporary copy resolved it. Other
+dependency-backed suites skipped where their fixtures were absent.
+
+The WPT runner now handles the multipart echo endpoint used by the FileAPI
+tests. Over 249 files Sobek recorded 5,382 passes and 961 known failures.
+Ekuma recorded 5,391 passes and 952 known failures. Both reported zero
+unexpected failures. Playwright verified the packaged Vite React counter
+and the slim Next.js counter. The Next app read request headers during
+SSR and changed its counter from zero to one after hydration. The slim
+binary's Go build metadata confirms that it links Ekuma and carries the
+`ekuma` tag.
+
+Ekuma's scoped data is sufficient for the tested request and thenable
+flows. `AsyncLocalStorage.enterWith` and `disable` currently throw because
+there is no persistent continuation setter. Those methods still need full
+coverage before changing the default.
+
+## Ekuma integration verification · 2026-11-20
+
+The earlier Ekuma backend integration entry records the implementation.
+With `OG_TEST_APPS` pointing at the installed copy, both Next.js suites
+finished with 54 passing tests and 32 skips. The skipped tests require
+additional fixtures, packages, or services. The root package runs passed
+outside Next. The Next failures in those runs came from invoking shared
+fixture tests with the root fixture uninstalled.
+
+## Ekuma performance and bundled database verification · 2026-11-20
+
+Benchmarked Go 1.27.0 on darwin/amd64 (Core i9-9880H, GOMAXPROCS=4).
+The runtime harness alternated engine order over six samples per engine.
+Both engines compiled and served the same 8.3 MB bundle from `next-hello`.
+The SSR requests reached its dynamic home page, rendered React, and
+created a fresh VM per request. The SQLite request ran a parameterized
+query through the bundled `better-sqlite3` shim against a seeded database.
+The CLI comparison alternated through two full builds of the same
+installed fixture per engine, including prerendering.
+
+| Workload (median) | Sobek | Ekuma |
+|---|---:|---:|
+| Full Next.js build | 54.6 s | 36.2 s |
+| Compile the server bundle | 1.40 s | 217 ms |
+| Create VM and install Web APIs | 2.53 ms | 36.6 ms |
+| Sequential dynamic SSR | 100 ms/request | 312 ms/request |
+| Dynamic SSR with four workers | 19.7 requests/s | 6.87 requests/s |
+| SQLite-backed request | 3.63 ms | 44.6 ms |
+
+Ekuma allocated 70.4 MB per bundle compile and 67.0 MB per sequential SSR
+request. Sobek allocated 159.3 MB and 50.0 MB respectively. A separate Ekuma
+CPU profile of engine and Web API setup spent 68.5% of samples under
+`BindScript`. Linking the prelude interns its strings and property keys
+into each new VM. Runtime samples, CLI build times, and the profile are
+under `.agents-workspace/tmp/ekuma-performance`. The harness is under
+`.agents-workspace/tmp/spikes/ekuma-performance`.
+
+The direct `runtime/natives` tests passed on both engines with the `aot`
+tag. PGlite served PostgreSQL for `pg` and `postgres.js`.
+`go-mysql-server` exercised the callback and promise APIs of `mysql2` and
+the `mariadb` shim. The SQLite tests exercised `better-sqlite3`. The
+Ekuma Next.js ORM fixture passed MySQL connection reuse, `pg`,
+`postgres.js`, local `@libsql/client`, TypeORM, Drizzle and Kysely on
+SQLite, and Prisma on SQLite, MySQL, and PostgreSQL. No selected shim or
+ORM test skipped. The first attempt to reuse generated clients included
+`TestPrisma`, which removes them to verify generation. That test passed
+with the original fixture build script. The remaining tests passed in a
+temporary copy using the generated clients.
+
+## Engine-specific Web API preludes · 2026-11-20
+
+The generator builds both engine bundles from the common TypeScript entry
+point. An esbuild define selects the `Intl`, RegExp, and Proxy fallbacks at
+bundle time. Go build tags embed the matching file. The Ekuma host skips
+registration of the Go callbacks that backed the Intl and RegExp fallbacks.
+The checked-in Sobek bundle is 3,790,662 bytes. The Ekuma bundle is 220,840
+bytes. Regeneration produced byte-identical outputs and CI checks both files.
+
+The new bundle test checks for FormatJS, regexp-tree, and the Proxy
+workaround on both engines. An overlay that embedded the Sobek prelude on
+Ekuma failed all three assertions. The normal Ekuma build passed. The
+traced Ekuma Web API installation now makes 929 weak conversions, down
+from 25,637 with the previous shared prelude.
+
+Three interleaved benchmark runs per build on the same Intel Mac showed
+Ekuma's median VM and Web API setup falling from 28.1 ms to 2.74 ms, the
+SQLite-backed request from 32.8 ms to 3.72 ms, and sequential Next.js SSR
+from 226 ms to 161 ms. The benchmarks used the same Next bundle and SQLite
+query and checked their output. Raw results are in
+`.agents-workspace/tmp/ekuma-prelude/benchmark-summary.txt`.
+
+Build and vet passed for `nodynamic` and `nodynamic,ekuma`. Each Go test
+run passed 24 packages. The Next suite recorded 54 passes and 32 skips
+with the prepared feature fixture. Other fixture-dependent tests skipped
+where dependencies were absent. Both WPT suites passed their expectations.
+Ekuma repeated 5,391 passes and 952 known failures. Sobek recorded one fewer
+pass than its earlier run in the timer group. The timer-only checks gave
+identical totals with the original and generated Sobek preludes. The
+known-failure list stayed unchanged.
+
+The Ekuma PostgreSQL driver tests passed with PGlite. Playwright exercised
+the packaged Next.js and Vite counters. The slim Next package also rendered
+request headers during SSR. The Next smoke fixture requested a missing
+favicon, and the Vite example reported zero console errors.
+
+## Unlowered ECMAScript fidelity comparison · 2026-11-20
+
+Ran 25 targeted probes directly on fresh Sobek and Ekuma VMs. The
+set was drawn from Oganesson's documented Sobek fixes and missing
+features. It used neither esbuild lowering nor Oganesson's prelude.
+Ekuma loaded its optional Intl companion, as Oganesson does.
+
+| Engine | Probes passed |
+| --- | ---: |
+| Sobek pin `f56574604191` | 2 of 25 |
+| Sobek main `6eceb967bb5b` | 9 of 25 |
+| Ekuma pin `12ccee101031` | 25 of 25 |
+| Ekuma main `44679f837f2a` | 25 of 25 |
+
+Current Sobek passed seven probes its pin failed, covering
+keyword-named fields, typed arrays from strings, mixed Unicode
+escapes, promise resolvers, groupBy, well-formed string methods,
+and ArrayBuffer transfer. The remaining cases include arrow
+arguments, defaulted array destructuring, callable proxies in
+instanceof, JSON lone surrogates, logical assignment through await,
+RegExp d and v, async generators, and missing newer built-ins.
+
+Ran Ekuma main's Test262 harness on its TC39 snapshot
+`2e58f87d8350ad51224617a041c6e041d52f8444`. It reported 53,791
+passes, four listed exclusions, and zero unexpected failures.
+The exclusions cover one time-zone data case, one Math.sinh
+precision case, and two SpiderMonkey Annex B staging expectations.
+
+Embedding probes ran without the thenable rewrite. Both Sobek
+revisions lost the store inside a dynamically assigned thenable
+and restored it after await. Ekuma kept it in both places.
+Oganesson's Ekuma adapter threw for `enterWith` and `disable`.
+Sobek's configured call-stack limit returned a Go
+`StackOverflowError` in both revisions. Those are embedding
+results outside the 25 language probes.
+
+The harness is under `.agents-workspace/tmp/spikes/js-fidelity`
+and the raw results and Test262 logs are under
+`.agents-workspace/tmp/js-fidelity`.
+
+## Backend-specific JavaScript transpilation · 2026-11-20
+
+The esbuild profile follows the backend selected by the Go build tag.
+Sobek keeps its async generator, RegExp flag, logical assignment, and
+explicit resource management lowering, along with the four Sobek source
+rewrites. Ekuma emits these constructs natively and leaves thenable
+descriptors intact. The script-loading rules are shared. The build host
+uses the selected profile for bundles, required modules, and CommonJS
+driver shims. The prelude generator selects both profiles explicitly.
+Regeneration under either tag produced identical output for each
+profile, and the Sobek prelude matched the original bytes.
+
+Next and Vite select a separate server profile when packaging. An
+Ekuma build lowers server syntax for a Sobek runtime or an ejected
+Go module. A Sobek build always lowers it so it can prerender the
+bundle in its own VM. Vite build-time preview uses the host profile.
+The Vite smoke app's browser assets matched byte for byte across tags.
+
+Build, vet, and the Go suites passed on both backends with available
+fixtures. The WPT runner exercised 249 files on each and reported
+no new failures. A Go overlay that forced the Sobek profile in an
+Ekuma build made the new syntax assertions fail. Packaged Next
+and Vite probes verified the emitted syntax and runtime behavior.
+Playwright checked Next hydration and client navigation in both
+same-engine combinations and with an Ekuma builder and Sobek runtime.
+It also checked Vite React state and async chunk loading on both
+engines. Separate fixture dependencies were unavailable for several
+framework tests. Logs and isolated fixtures are under
+`.agents-workspace/tmp/backend-transpilation`.
+
+The focused Next.js ORM fixture kept the SQLite and driver routes and
+disabled Prisma generation. Its SQLite, libSQL, MySQL, and PostgreSQL
+tests passed on both backends, with the `aot` tag for PGlite. The separate
+`pg` and `postgres.js` shim suites also passed against PGlite. The
+full-fixture attempts were stopped before all driver routes completed.
+
+## Tailwind WASI package installation in CI · 2026-11-20
+
+The core, next-build, and next CI shards failed building the Next feature
+fixture. Tailwind's Oxide loader could not find a binding. A clean install
+reproduced the missing package. The registry manifest for
+`@tailwindcss/oxide-wasm32-wasi@4.3.5` omits the platform metadata that the
+installer expected, although `@tailwindcss/oxide` still declares it as an
+optional dependency. Previously prepared fixtures had the binding installed.
+
+`internal/install` now accepts an explicitly named `-wasm32-wasi` optional
+build when its manifest omits both CPU and OS metadata. The registry test
+failed before the fix because the untagged WASI package was missing. It
+passed with the fix, and an explicitly x64 package with the same suffix
+continued to be excluded. The installer source is part of the fixture
+cache key, so CI will reinstall its fixture dependencies.
+
+A clean registry install then pulled the Oxide WASI binary, and the
+`TestOxideIgnoreRules` and `TestNextFontGoogle` host tests passed.

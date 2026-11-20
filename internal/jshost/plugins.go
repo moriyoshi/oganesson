@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -58,14 +58,15 @@ func FindConfig(dir string) string {
 // PluginHost runs a project's JS esbuild plugins for the duration of a build.
 type PluginHost struct {
 	e      *engine.Engine
-	bridge *sobek.Object
+	bridge *jsvm.Object
 	cancel context.CancelFunc
 	done   chan struct{}
+	err    error // loop error, read after done closes
 
 	mu      sync.Mutex
 	builds  map[int64]api.PluginBuild
 	nextID  int64
-	release func(func(*sobek.Runtime) error)
+	release func(func(*jsvm.Runtime) error)
 	reads   *fileReads // node_modules asset reads of this host's build (from the Host)
 }
 
@@ -162,7 +163,7 @@ globalThis.__ogBridge = createBridge(%s, services);
 		}})
 		p.e = e
 		defer e.Close()
-		err := e.Run(ctx, func(vm *sobek.Runtime) error {
+		err := e.Run(ctx, func(vm *jsvm.Runtime) error {
 			if err := h.prepare(e); err != nil {
 				return err
 			}
@@ -179,6 +180,7 @@ globalThis.__ogBridge = createBridge(%s, services);
 			ready <- nil
 			return nil
 		})
+		p.err = err
 		if err != nil && err != engine.ErrInterrupted {
 			select {
 			case ready <- err:
@@ -379,7 +381,7 @@ func (p *PluginHost) AssetReads() []string {
 // Close stops the plugin host.
 func (p *PluginHost) Close() {
 	if p.release != nil {
-		p.release(func(*sobek.Runtime) error { return nil })
+		p.release(func(*jsvm.Runtime) error { return nil })
 	}
 	p.cancel()
 	<-p.done
@@ -393,13 +395,13 @@ func (p *PluginHost) call(method string, args ...any) (any, error) {
 		err error
 	}
 	ch := make(chan result, 1)
-	p.e.Loop.Post(func(vm *sobek.Runtime) error {
-		fn, ok := sobek.AssertFunction(p.bridge.Get(method))
+	p.e.Loop.Post(func(vm *jsvm.Runtime) error {
+		fn, ok := jsvm.AssertFunction(p.bridge.Get(method))
 		if !ok {
 			ch <- result{err: fmt.Errorf("jshost: bridge has no %s", method)}
 			return nil
 		}
-		vals := make([]sobek.Value, len(args))
+		vals := make([]jsvm.Value, len(args))
 		for i, a := range args {
 			vals[i] = vm.ToValue(a)
 		}
@@ -408,8 +410,8 @@ func (p *PluginHost) call(method string, args ...any) (any, error) {
 			ch <- result{err: err}
 			return nil
 		}
-		settle := func(v sobek.Value) {
-			if v == nil || sobek.IsUndefined(v) || sobek.IsNull(v) {
+		settle := func(v jsvm.Value) {
+			if v == nil || jsvm.IsUndefined(v) || jsvm.IsNull(v) {
 				ch <- result{}
 				return
 			}
@@ -418,8 +420,8 @@ func (p *PluginHost) call(method string, args ...any) (any, error) {
 				ch <- result{err: err}
 				return
 			}
-			stringify, _ := sobek.AssertFunction(s)
-			js, err := stringify(sobek.Undefined(), v)
+			stringify, _ := jsvm.AssertFunction(s)
+			js, err := stringify(jsvm.Undefined(), v)
 			if err != nil {
 				ch <- result{err: err}
 				return
@@ -427,13 +429,13 @@ func (p *PluginHost) call(method string, args ...any) (any, error) {
 			var out any
 			ch <- result{v: out, err: json.Unmarshal([]byte(js.String()), &out)}
 		}
-		if prom, ok := v.Export().(*sobek.Promise); ok {
-			then, _ := sobek.AssertFunction(vm.ToValue(prom).ToObject(vm).Get("then"))
+		if prom, ok := jsvm.AsPromise(v); ok {
+			then, _ := jsvm.AssertFunction(vm.ToValue(prom).ToObject(vm).Get("then"))
 			_, err := then(vm.ToValue(prom),
-				vm.ToValue(func(c sobek.FunctionCall) sobek.Value { settle(c.Argument(0)); return sobek.Undefined() }),
-				vm.ToValue(func(c sobek.FunctionCall) sobek.Value {
+				vm.ToValue(func(c jsvm.FunctionCall) jsvm.Value { settle(c.Argument(0)); return jsvm.Undefined() }),
+				vm.ToValue(func(c jsvm.FunctionCall) jsvm.Value {
 					ch <- result{err: fmt.Errorf("%s", errorText(c.Argument(0)))}
-					return sobek.Undefined()
+					return jsvm.Undefined()
 				}))
 			if err != nil {
 				ch <- result{err: err}
@@ -443,13 +445,26 @@ func (p *PluginHost) call(method string, args ...any) (any, error) {
 		settle(v)
 		return nil
 	})
-	r := <-ch
-	return r.v, r.err
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	case <-p.done:
+		// A result posted just before shutdown still belongs to this call.
+		select {
+		case r := <-ch:
+			return r.v, r.err
+		default:
+			if p.err != nil {
+				return nil, p.err
+			}
+			return nil, fmt.Errorf("jshost: plugin loop stopped during %s", method)
+		}
+	}
 }
 
-func errorText(v sobek.Value) string {
-	if o, ok := v.(*sobek.Object); ok {
-		if st := o.Get("stack"); st != nil && !sobek.IsUndefined(st) {
+func errorText(v jsvm.Value) string {
+	if o, ok := v.(*jsvm.Object); ok {
+		if st := o.Get("stack"); st != nil && !jsvm.IsUndefined(st) {
 			return st.String()
 		}
 	}
@@ -460,9 +475,9 @@ func errorText(v sobek.Value) string {
 }
 
 // installHost exposes Go services to the bridge and the esbuild shim.
-func (p *PluginHost) installHost(vm *sobek.Runtime) error {
+func (p *PluginHost) installHost(vm *jsvm.Runtime) error {
 	hostObj := vm.NewObject()
-	_ = hostObj.Set("resolve", func(buildID int64, path string, opts map[string]any) sobek.Value {
+	_ = hostObj.Set("resolve", func(buildID int64, path string, opts map[string]any) jsvm.Value {
 		promise, resolve, reject := vm.NewPromise()
 		p.mu.Lock()
 		pb, ok := p.builds[buildID]
@@ -487,7 +502,7 @@ func (p *PluginHost) installHost(vm *sobek.Runtime) error {
 		// Resolve off the loop: it may call back into JS plugins.
 		go func() {
 			r := pb.Resolve(path, ro)
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				out := map[string]any{
 					"path": r.Path, "namespace": r.Namespace, "external": r.External,
 					"sideEffects": r.SideEffects, "suffix": r.Suffix, "pluginData": tokenOf(r.PluginData),
@@ -516,8 +531,8 @@ func (p *PluginHost) installHost(vm *sobek.Runtime) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), hostObj, esb)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), hostObj, esb)
 	return err
 }
 

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -57,18 +57,18 @@ func Plugin() api.Plugin {
 func Install(e *engine.Engine, c *Cache) error {
 	vm := e.VM
 	o := vm.NewObject()
-	_ = o.Set("get", func(key string, tags []string) sobek.Value {
+	_ = o.Set("get", func(key string, tags []string) jsvm.Value {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		ds := c.dataState()
 		d, ok := ds.data[key]
 		if !ok {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		for _, t := range append(append([]string(nil), d.tags...), tags...) {
 			if at, ok := ds.tagsRevised[t]; ok && !at.Before(d.lastModified) {
 				delete(ds.data, key)
-				return sobek.Null()
+				return jsvm.Null()
 			}
 		}
 		r := vm.NewObject()
@@ -98,22 +98,22 @@ func Install(e *engine.Engine, c *Cache) error {
 	})
 	// staticPaths(page): the build's StaticPaths of a dynamic page, as JSON
 	// (null when the build recorded none).
-	_ = o.Set("staticPaths", func(page string) sobek.Value {
+	_ = o.Set("staticPaths", func(page string) jsvm.Value {
 		c.mu.Lock()
 		sp := c.staticPaths[page]
 		c.mu.Unlock()
 		if sp == nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		b, err := json.Marshal(sp)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return vm.ToValue(string(b))
 	})
 	// revalidatePath(path, onlyGenerated): regenerate a page now (Next's
 	// res.revalidate); resolves to { status, revalidated }.
-	_ = o.Set("revalidatePath", func(path string, onlyGenerated bool) sobek.Value {
+	_ = o.Set("revalidatePath", func(path string, onlyGenerated bool) jsvm.Value {
 		promise, resolve, reject := vm.NewPromise()
 		c.mu.Lock()
 		rv := c.revalidator
@@ -125,7 +125,7 @@ func Install(e *engine.Engine, c *Cache) error {
 		complete := e.Loop.Async()
 		go func() {
 			status, revalidated, err := rv(context.Background(), path, onlyGenerated)
-			complete(func(vm *sobek.Runtime) error {
+			complete(func(vm *jsvm.Runtime) error {
 				if err != nil {
 					return reject(vm.NewGoError(err))
 				}
@@ -142,7 +142,7 @@ func Install(e *engine.Engine, c *Cache) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), o)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), o)
 	return err
 }

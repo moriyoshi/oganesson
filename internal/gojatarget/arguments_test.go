@@ -3,7 +3,7 @@ package gojatarget
 import (
 	"testing"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
 // TestHoldArrowArguments runs code whose functions read arguments only
@@ -26,7 +26,7 @@ function w() { return [g].map((m) => m.f.apply(this, arguments))[0]; } w("a", "b
 					t.Errorf("%s: panic %v\n%s", c.name, r, code)
 				}
 			}()
-			v, err := sobek.New().RunString(code)
+			v, err := jsvm.New().RunString(code)
 			if err != nil || v.String() != c.want {
 				t.Errorf("%s: got %v, %v, want %s\n%s", c.name, v, err, c.want, code)
 			}

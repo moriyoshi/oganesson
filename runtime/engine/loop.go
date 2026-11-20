@@ -6,21 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 )
 
-// Loop is a single-threaded event loop that owns one sobek.Runtime. All JS
+// Loop is a single-threaded event loop that owns one jsvm.Runtime. All JS
 // runs on the goroutine that called Run; other goroutines hand work to it via
 // Async completions.
 //
 // The loop exits when nothing can make progress: no referenced timers, no
 // outstanding async operations, and an empty job queue.
 type Loop struct {
-	vm      *sobek.Runtime
+	vm      *jsvm.Runtime
 	actx    *asyncContext
 	mu      sync.Mutex
 	queue   []func() error // jobs posted from any goroutine
@@ -41,20 +40,20 @@ type Loop struct {
 	uncaught func(error) error
 	// rejected holds promises rejected without a handler, in order, when
 	// rejections are tracked (Options.UnhandledRejections).
-	rejected []*sobek.Promise
+	rejected []*jsvm.Promise
 	tracking bool
 	// uncaughtSym is Symbol.for("og.uncaught") (claim), once looked up.
-	uncaughtSym *sobek.Symbol
+	uncaughtSym *jsvm.Symbol
 }
 
 // trackRejections records unhandled rejections for call to report.
-func (l *Loop) trackRejections(vm *sobek.Runtime) {
+func (l *Loop) trackRejections(vm *jsvm.Runtime) {
 	l.tracking = true
-	vm.SetPromiseRejectionTracker(func(p *sobek.Promise, op sobek.PromiseRejectionOperation) {
+	vm.SetPromiseRejectionTracker(func(p *jsvm.Promise, op jsvm.PromiseRejectionOperation) {
 		switch op {
-		case sobek.PromiseRejectionReject:
+		case jsvm.PromiseRejectionReject:
 			l.rejected = append(l.rejected, p)
-		case sobek.PromiseRejectionHandle:
+		case jsvm.PromiseRejectionHandle:
 			for i, q := range l.rejected {
 				if q == p {
 					l.rejected = append(l.rejected[:i], l.rejected[i+1:]...)
@@ -78,8 +77,8 @@ func (l *Loop) reportRejections() error {
 		} else {
 			err = fmt.Errorf("Uncaught (in promise) %s", reason.String())
 		}
-		if obj, ok := reason.(*sobek.Object); ok {
-			if stack := obj.Get("stack"); stack != nil && !sobek.IsUndefined(stack) {
+		if obj, ok := reason.(*jsvm.Object); ok {
+			if stack := obj.Get("stack"); stack != nil && !jsvm.IsUndefined(stack) {
 				err = fmt.Errorf("%s", stack.String())
 			}
 		}
@@ -100,26 +99,26 @@ func (l *Loop) reportRejections() error {
 // which reports whether it handled it: the Node shims deliver it to
 // process's "uncaughtException" / "unhandledRejection" listeners, as Node
 // does. An error thrown by the handler takes the original's place.
-func (l *Loop) claim(v sobek.Value, p *sobek.Promise) (handled bool, err error) {
+func (l *Loop) claim(v jsvm.Value, p *jsvm.Promise) (handled bool, err error) {
 	if l.uncaughtSym == nil {
 		s, rerr := l.vm.RunString(`Symbol.for("og.uncaught")`)
 		if rerr != nil {
 			return false, nil
 		}
-		l.uncaughtSym, _ = s.(*sobek.Symbol)
+		l.uncaughtSym, _ = s.(*jsvm.Symbol)
 		if l.uncaughtSym == nil {
 			return false, nil
 		}
 	}
-	fn, ok := sobek.AssertFunction(l.vm.GlobalObject().GetSymbol(l.uncaughtSym))
+	fn, ok := jsvm.AssertFunction(l.vm.GlobalObject().GetSymbol(l.uncaughtSym))
 	if !ok {
 		return false, nil
 	}
-	promise := sobek.Undefined()
+	promise := jsvm.Undefined()
 	if p != nil {
 		promise = l.vm.ToValue(p)
 	}
-	r, err := fn(sobek.Undefined(), v, promise)
+	r, err := fn(jsvm.Undefined(), v, promise)
 	if err != nil {
 		return false, err
 	}
@@ -136,7 +135,7 @@ type timer struct {
 	index    int // position in the heap, -1 when not armed
 }
 
-func newLoop(vm *sobek.Runtime, actx *asyncContext) *Loop {
+func newLoop(vm *jsvm.Runtime, actx *asyncContext) *Loop {
 	return &Loop{
 		vm: vm, actx: actx, start: time.Now(),
 		wake:     make(chan struct{}, 1),
@@ -149,11 +148,11 @@ func newLoop(vm *sobek.Runtime, actx *asyncContext) *Loop {
 // called on the loop goroutine. The returned function must be called exactly
 // once, from any goroutine; its argument runs on the loop in the async
 // context that was current when Async was called.
-func (l *Loop) Async() (complete func(func(*sobek.Runtime) error)) {
+func (l *Loop) Async() (complete func(func(*jsvm.Runtime) error)) {
 	l.pending++
-	ctx := l.actx.current
+	ctx := l.actx.capture()
 	var once sync.Once
-	return func(fn func(*sobek.Runtime) error) {
+	return func(fn func(*jsvm.Runtime) error) {
 		once.Do(func() {
 			l.post(func() error {
 				l.pending--
@@ -166,7 +165,7 @@ func (l *Loop) Async() (complete func(func(*sobek.Runtime) error)) {
 // Post schedules fn on the loop from any goroutine. Unlike Async it does not
 // keep the loop alive: if the loop is idle, fn runs only if the loop is
 // driven again (Run, Await or Drain).
-func (l *Loop) Post(fn func(*sobek.Runtime) error) {
+func (l *Loop) Post(fn func(*jsvm.Runtime) error) {
 	l.post(func() error { return fn(l.vm) })
 }
 
@@ -174,9 +173,9 @@ func (l *Loop) Post(fn func(*sobek.Runtime) error) {
 // returned function posts fn to run in that context, from any goroutine;
 // like Post, it does not keep the loop alive (an I/O handle's events: its
 // data arrives in the context that opened it, as Node's async resources).
-func (l *Loop) Bind() func(func(*sobek.Runtime) error) {
-	ctx := l.actx.current
-	return func(fn func(*sobek.Runtime) error) {
+func (l *Loop) Bind() func(func(*jsvm.Runtime) error) {
+	ctx := l.actx.capture()
+	return func(fn func(*jsvm.Runtime) error) {
 		l.post(func() error { return l.actx.runIn(ctx, func() error { return fn(l.vm) }) })
 	}
 }
@@ -210,7 +209,7 @@ func (l *Loop) SetTimer(d time.Duration, repeat bool, fn func() error) int64 {
 		d = 0
 	}
 	l.nextID++
-	t := &timer{id: l.nextID, when: time.Now().Add(d), fn: fn, ctx: l.actx.current, ref: true}
+	t := &timer{id: l.nextID, when: time.Now().Add(d), fn: fn, ctx: l.actx.capture(), ref: true}
 	if repeat {
 		t.interval = max(d, time.Millisecond)
 	}
@@ -290,12 +289,10 @@ func (l *Loop) stepAlive(ctx context.Context, alive bool) error {
 	if ctx.Err() != nil {
 		return ErrInterrupted
 	}
-	stop := context.AfterFunc(ctx, func() { l.vm.Interrupt(ErrInterrupted) })
-	defer stop()
 
 	// Run already-queued jobs before looking at timers.
 	if job := l.popJob(); job != nil {
-		return l.call(job)
+		return jsvm.WithContext(l.vm, ctx, ErrInterrupted, func() error { return l.call(job) })
 	}
 	if !alive && l.pending == 0 && l.refs == 0 {
 		return errIdle
@@ -305,7 +302,7 @@ func (l *Loop) stepAlive(ctx context.Context, alive bool) error {
 	if len(l.timers) > 0 {
 		d := time.Until(l.timers[0].when)
 		if d <= 0 {
-			return l.fireTimer()
+			return jsvm.WithContext(l.vm, ctx, ErrInterrupted, l.fireTimer)
 		}
 		tm = time.NewTimer(d)
 		wait = tm.C
@@ -346,29 +343,32 @@ func (l *Loop) call(job func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			switch v := r.(type) {
-			case *sobek.Exception:
+			case *jsvm.Exception:
 				if handled, herr := l.claim(v.Value(), nil); herr != nil {
 					err = l.uncaught(herr)
 				} else if !handled {
 					err = l.uncaught(v)
 				}
-			case *sobek.InterruptedError:
-				err = ErrInterrupted
-			case *sobek.StackOverflowError:
-				err = l.uncaught(stackOverflow(v))
-			default:
-				// A Go panic from inside Goja or a host function must not take
-				// the process down; surface it as an error for this engine.
-				err = &PanicError{Value: r, Stack: debug.Stack()}
+				return
+			case error:
+				if isInterrupted(v) {
+					err = ErrInterrupted
+					return
+				}
+				if overflow := stackOverflow(v); overflow != nil {
+					err = l.uncaught(overflow)
+					return
+				}
 			}
+			// Surface host panics as errors for this engine.
+			err = &PanicError{Value: r, Stack: debug.Stack()}
 		}
 	}()
 	if err := job(); err != nil {
-		var ie *sobek.InterruptedError
-		if errors.As(err, &ie) {
+		if isInterrupted(err) {
 			return ErrInterrupted
 		}
-		var ex *sobek.Exception
+		var ex *jsvm.Exception
 		if errors.As(err, &ex) {
 			if handled, herr := l.claim(ex.Value(), nil); herr != nil {
 				return l.uncaught(herr)
@@ -376,9 +376,16 @@ func (l *Loop) call(job func() error) (err error) {
 				return l.reportIfTracking()
 			}
 		}
-		return l.uncaught(stackOverflow(err))
+		if overflow := stackOverflow(err); overflow != nil {
+			err = overflow
+		}
+		return l.uncaught(err)
 	}
 	return l.reportIfTracking()
+}
+
+func isInterrupted(err error) bool {
+	return jsvm.IsInterrupted(err) || errors.Is(err, ErrInterrupted) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (l *Loop) reportIfTracking() error {
@@ -422,18 +429,3 @@ type PanicError struct {
 }
 
 func (p *PanicError) Error() string { return fmt.Sprintf("engine: panic: %v\n%s", p.Value, p.Stack) }
-
-// stackOverflow gives Goja's stack overflow (uncatchable there, a
-// RangeError in Node) Node's message.
-func stackOverflow(err error) error {
-	var so *sobek.StackOverflowError
-	if errors.As(err, &so) {
-		// The innermost frames show the recursion.
-		lines := strings.Split(so.String(), "\n")
-		if len(lines) > 40 {
-			lines = append(lines[:40], fmt.Sprintf("\t... %d more frames", len(lines)-40))
-		}
-		return fmt.Errorf("RangeError: Maximum call stack size exceeded\n%s", strings.Join(lines, "\n"))
-	}
-	return err
-}

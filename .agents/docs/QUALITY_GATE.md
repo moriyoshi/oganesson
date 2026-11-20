@@ -29,7 +29,7 @@ Every command above answers one question: *did anything turn red?* None of them 
 
 ## 2. Generated and vendored inputs
 
-- Edited `runtime/webapi/js/src/**`: run `go generate ./runtime/webapi/` and include the regenerated `prelude.js`.
+- Edited `runtime/webapi/js/src/**`: run `go generate ./runtime/webapi/` and include changes to both generated preludes (`prelude.js` and `prelude-ekuma.js`).
 - Changed the Web API surface: run the WPT runner. If expectations change, review the `testdata/wpt-expectations.json` diff line by line before accepting `-wpt.update`.
 - Added, removed, or bumped a Go module or a vendored JS package: run `go generate ./runtime/notices` and include the regenerated `THIRD_PARTY_NOTICES.txt` (`TestNoticesCoverLinkedModules` and CI fail otherwise). The script fails when a component has no license file; find its license before shipping it.
 - Bumped a vendored JS package: change the pinned version in `scripts/vendor-js.sh`, re-run it, then run the whole suite. unenv and web-streams-polyfill are embedded into every bundle.

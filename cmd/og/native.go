@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/internal/nativegen"
 )
 
@@ -234,7 +235,11 @@ func goBuildModule(ctx context.Context, gobin, dir, source string, files map[str
 	if err != nil {
 		return err
 	}
-	return run("build", "-trimpath", "-tags", "nodynamic", "-ldflags", "-s -w", "-o", abs, ".")
+	tags := "nodynamic"
+	if jsvm.UsesEkuma {
+		tags += ",ekuma"
+	}
+	return run("build", "-trimpath", "-tags", tags, "-ldflags", "-s -w", "-o", abs, ".")
 }
 
 // slimGoMod is the go.mod of a slim runtime module: it requires only

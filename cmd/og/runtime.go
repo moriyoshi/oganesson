@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 )
 
@@ -42,6 +43,16 @@ func setting(bi *debug.BuildInfo, key string) string {
 		}
 	}
 	return ""
+}
+
+func runtimeUsesEkuma(file string) bool {
+	bi, err := buildinfo.ReadFile(file)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(strings.FieldsFunc(setting(bi, "-tags"), func(r rune) bool {
+		return r == ',' || r == ' '
+	}), "ekuma")
 }
 
 // sourceID names the source an og was built from: its VCS revision (with

@@ -84,13 +84,13 @@ jobs:
       - name: go vet
         run: go vet -tags nodynamic ./cmd/... ./internal/... ./runtime/... ./pack/...
 
-      # prelude.js is generated from runtime/webapi/js/src and checked in.
-      - name: prelude.js is up to date
+      # Both engine preludes are generated from runtime/webapi/js/src.
+      - name: Web API preludes are up to date
         working-directory: runtime/webapi
         run: |
           go run ./internal/genprelude
-          git diff --exit-code -- prelude.js || {
-            echo "::error::runtime/webapi/prelude.js is stale; run go generate ./runtime/webapi/"
+          git diff --exit-code -- prelude.js prelude-ekuma.js || {
+            echo "::error::Generated Web API preludes are stale. Run go generate ./runtime/webapi/"
             exit 1
           }
 

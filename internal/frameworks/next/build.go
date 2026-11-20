@@ -153,6 +153,8 @@ type Options struct {
 	// Readable leaves the browser bundle and stylesheets unminified (the
 	// server bundle never is), for inspecting the output.
 	Readable bool
+	// ServerBackend selects the profile for server output. It defaults to the build host's backend.
+	ServerBackend gojatarget.Backend
 }
 
 type builder struct {
@@ -164,6 +166,7 @@ type builder struct {
 	clientMain           string // browser entry, relative to /_next/
 	log                  func(format string, args ...any)
 	minify               bool
+	serverBackend        gojatarget.Backend
 	middleware           *middleware
 	host                 *jshost.Host       // runs Next's build-time helpers
 	plugins              *jshost.PluginHost // og.config.* esbuild plugins, if any
@@ -235,7 +238,7 @@ func Build(ctx context.Context, dir string, opts Options) (*Output, error) {
 	if err != nil {
 		return nil, fmt.Errorf("next: resolve project directory: %w", err)
 	}
-	b := &builder{dir: dir, log: opts.Log, minify: !opts.Readable, trees: map[string]*TreeResult{}, clients: map[string]*clientModule{}, actions: map[string]*actionModule{}, licenses: &licenses.Collector{}}
+	b := &builder{dir: dir, log: opts.Log, minify: !opts.Readable, serverBackend: opts.ServerBackend, trees: map[string]*TreeResult{}, clients: map[string]*clientModule{}, actions: map[string]*actionModule{}, licenses: &licenses.Collector{}}
 	if b.nextDir, err = findPackage(dir, "next"); err != nil {
 		return nil, err
 	}
@@ -563,7 +566,7 @@ func (b *builder) esbuild() (code, metafile string, err error) {
 		isr.Plugin(),
 		b.plugin(),
 	)
-	gojatarget.Apply(&opts)
+	b.serverBackend.Apply(&opts)
 	if b.traceBuild {
 		opts.Format = api.FormatESModule // imports of the built-ins stay imports
 	}
@@ -579,7 +582,7 @@ func (b *builder) esbuild() (code, metafile string, err error) {
 	}
 	for _, f := range res.OutputFiles {
 		if !strings.HasSuffix(f.Path, ".css") { // the JS output ("<stdout>")
-			return gojatarget.Finish(string(f.Contents)), res.Metafile, nil
+			return b.serverBackend.Finish(string(f.Contents)), res.Metafile, nil
 		}
 	}
 	return "", "", fmt.Errorf("next: server build produced no JS")

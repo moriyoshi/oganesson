@@ -35,7 +35,7 @@ import (
 	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -159,8 +159,8 @@ func Install(e *engine.Engine) error {
 	vm := e.VM
 	ctx, cancel := context.WithCancel(context.Background())
 	e.OnClose(cancel)
-	made := map[string]*sobek.Object{}
-	load := func(name string) *sobek.Object {
+	made := map[string]*jsvm.Object{}
+	load := func(name string) *jsvm.Object {
 		if o, ok := made[name]; ok {
 			return o
 		}
@@ -179,17 +179,17 @@ func Install(e *engine.Engine) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), vm.ToValue(load))
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), vm.ToValue(load))
 	return err
 }
 
 // wrap makes f callable from JavaScript.
-func wrap(e *engine.Engine, ctx context.Context, module string, f Func) func(sobek.FunctionCall) sobek.Value {
+func wrap(e *engine.Engine, ctx context.Context, module string, f Func) func(jsvm.FunctionCall) jsvm.Value {
 	vm := e.VM
 	fv := reflect.ValueOf(f.Fn)
 	t := fv.Type()
-	return func(call sobek.FunctionCall) sobek.Value {
+	return func(call jsvm.FunctionCall) jsvm.Value {
 		args := make([]reflect.Value, t.NumIn())
 		j := 0
 		for i := 0; i < t.NumIn(); i++ {
@@ -201,7 +201,7 @@ func wrap(e *engine.Engine, ctx context.Context, module string, f Func) func(sob
 			v, err := toGo(vm, call.Argument(j), in)
 			j++
 			if err != nil {
-				panic(vm.NewTypeError("og:%s.%s: argument %d: %v", module, f.Name, j, err))
+				panic(vm.NewTypeError(fmt.Sprintf("og:%s.%s: argument %d: %v", module, f.Name, j, err)))
 			}
 			args[i] = v
 		}
@@ -216,7 +216,7 @@ func wrap(e *engine.Engine, ctx context.Context, module string, f Func) func(sob
 		done := e.Loop.Async()
 		go func() {
 			out, err := invoke(fv, args)
-			done(func(vm *sobek.Runtime) error {
+			done(func(vm *jsvm.Runtime) error {
 				if err != nil {
 					return reject(jsError(vm, err))
 				}
@@ -228,7 +228,7 @@ func wrap(e *engine.Engine, ctx context.Context, module string, f Func) func(sob
 }
 
 // jsError is err as a JavaScript Error with its message.
-func jsError(vm *sobek.Runtime, err error) *sobek.Object {
+func jsError(vm *jsvm.Runtime, err error) *jsvm.Object {
 	e, cerr := vm.New(vm.Get("Error"), vm.ToValue(err.Error()))
 	if cerr != nil {
 		return vm.NewGoError(err)

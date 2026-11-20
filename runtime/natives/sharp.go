@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/imageopt"
 )
 
@@ -53,11 +53,11 @@ func formatName(contentType string) string {
 }
 
 // sharpInput reads the input: bytes, or a file path.
-func sharpInput(v sobek.Value) ([]byte, error) {
+func sharpInput(v jsvm.Value) ([]byte, error) {
 	switch x := v.Export().(type) {
 	case string:
 		return os.ReadFile(x)
-	case sobek.ArrayBuffer:
+	case jsvm.ArrayBuffer:
 		return append([]byte(nil), x.Bytes()...), nil
 	case []byte:
 		return append([]byte(nil), x...), nil
@@ -294,7 +294,7 @@ var metadataKeys = []string{
 
 // orderedObject is m as an object with sharp's key order (a Go map's
 // order is random); keys not listed follow.
-func orderedObject(vm *sobek.Runtime, m map[string]any) *sobek.Object {
+func orderedObject(vm *jsvm.Runtime, m map[string]any) *jsvm.Object {
 	o := vm.NewObject()
 	set := func(k string, v any) {
 		if ao, ok := v.(map[string]any); ok && k == "autoOrient" {
@@ -323,10 +323,10 @@ func orderedObject(vm *sobek.Runtime, m map[string]any) *sobek.Object {
 	return o
 }
 
-func installSharp(vm *sobek.Runtime) (*sobek.Object, error) {
+func installSharp(vm *jsvm.Runtime) (*jsvm.Object, error) {
 	o := vm.NewObject()
 	throw := func(err error) { panic(vm.NewGoError(err)) }
-	_ = o.Set("metadata", func(input sobek.Value) sobek.Value {
+	_ = o.Set("metadata", func(input jsvm.Value) jsvm.Value {
 		b, err := sharpInput(input)
 		if err != nil {
 			throw(err)
@@ -337,7 +337,7 @@ func installSharp(vm *sobek.Runtime) (*sobek.Object, error) {
 		}
 		return orderedObject(vm, m)
 	})
-	_ = o.Set("process", func(input sobek.Value, opsJSON string) sobek.Value {
+	_ = o.Set("process", func(input jsvm.Value, opsJSON string) jsvm.Value {
 		b, err := sharpInput(input)
 		if err != nil {
 			throw(err)
@@ -352,7 +352,7 @@ func installSharp(vm *sobek.Runtime) (*sobek.Object, error) {
 		}
 		return vm.ToValue(map[string]any{"data": vm.NewArrayBuffer(data), "info": info})
 	})
-	_ = o.Set("writeFile", func(path string, data sobek.ArrayBuffer) {
+	_ = o.Set("writeFile", func(path string, data jsvm.ArrayBuffer) {
 		if err := os.WriteFile(path, data.Bytes(), 0o644); err != nil {
 			throw(err)
 		}

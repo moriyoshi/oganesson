@@ -7,12 +7,14 @@ Oganesson compiles a Next.js App Router project into one executable that serves 
 | Component | Role |
 |-----------|------|
 | [esbuild](https://github.com/evanw/esbuild) (Go API) | Every transform and bundle: server layers, browser build, CSS, and on-demand CJS conversion at build time. |
-| [Sobek](https://github.com/grafana/sobek) (Grafana's fork of Goja) + goja_nodejs's `require` | The JavaScript engine, both in the produced binary and in the build-time host. goja_nodejs's CommonJS loader is vendored into `third_party/goja_nodejs` (`scripts/vendor-goja-nodejs.sh`), rewritten for Sobek. |
+| [Sobek](https://github.com/grafana/sobek) (Grafana's fork of Goja) or [Ekuma](https://github.com/hajimehoshi/ekuma) | The JavaScript engine for the build host and the packaged runtime. The engine boundary and vendored goja_nodejs CommonJS loader support both. |
 | [TypeScript-Go](https://github.com/microsoft/TypeScript) | `og check` and tsconfig semantics, reached through the `_tsoverlay/ogapi` facade, which is installed inside `third_party/typescript` because TS-Go's packages are `internal/`. |
 | Next.js itself | Its entry templates (`edge-ssr-app`, `app-page`, `edge-app-route`, `app-route`, `middleware`), `loadConfig`, `getDefineEnv`, app-render, and the client router are used as shipped and patched only where necessary (`internal/frameworks/next/patches.go`). |
 | unenv, pathe, web-streams-polyfill, Node's own `lib/` files and bundled minimatch | Vendored JS (`scripts/vendor-js.sh`) for the Node built-in surface and Web Streams; `node:path` (with `matchesGlob` on Node's minimatch) and the web stream adapters (`Readable.toWeb` and friends) are Node's own files, pinned to a Node release. |
 
-Sobek lacks async generators, ESM (as og uses it), the RegExp `v` and `d` flags, `Intl`, and `WeakRef`; it has Unicode property escapes. `internal/gojatarget` (named for Goja, which Sobek forks) holds the esbuild `Supported` table every engine-bound bundle is lowered with, and the source fixups for parser and runtime bugs Sobek shares with Goja (keyword-named class fields, `arguments` read only by nested arrow functions, and thenable jobs that drop the async context: `then` methods become context-capturing accessors). It also sets the UTF-8 charset, which avoids a parser panic on mixed escapes.
+`internal/gojatarget` selects the esbuild profile for engine-bound JavaScript. Sobek lowers async generators, logical assignments, RegExp `d` and `v` literals, and `using`. Its post-esbuild rewrites handle keyword-named class fields, defaulted array patterns, nested arrow functions that capture `arguments`, and thenable jobs that drop the async context. Ekuma preserves those language features and skips the Sobek rewrites. Both profiles use UTF-8 and keep the module transforms needed by Oganesson's script loader. Browser bundles use the framework's browser target.
+
+Sobek is the default. Build with `OG_ENGINE=ekuma scripts/build-og.sh .agents-workspace/tmp/og-ekuma` to select the experimental Ekuma backend. The build host uses its own profile for tools and configuration. Server bundles use the Sobek profile if the build host or packaged runtime needs it, or if the build also ejects a Go module. Ekuma's scoped continuation data backs `AsyncLocalStorage.run`, `exit`, `bind`, and `snapshot`. The current Ekuma API has no persistent continuation setter, so `enterWith` and `disable` throw on that backend.
 
 ## Repository layout
 
@@ -20,13 +22,14 @@ Sobek lacks async generators, ESM (as og uses it), the RegExp `v` and `d` flags,
 |------|----------|
 | `cmd/og` | CLI: `install`, `check`, `build`, `serve`, `compat` (the compatibility corpus runner: install, build, serve and crawl apps, each a child `og` process), `licenses`, `version`. A Oganesson executable with an appended payload acts as that app's server. |
 | `internal/install` | npm-free package installer (registry tarballs, integrity checks, no lifecycle scripts). |
-| `internal/jshost` | Build-time Sobek host: next.config loading, middleware matchers, the esbuild JS plugin bridge, the webpack loader shim, `require` (a computed `require(x)` / `import(x)` in a bundled module resolves a relative `x` from that module's file; a `.node` addon throws Node's `ERR_DLOPEN_FAILED`; sharp and better-sqlite3 are og's Go-backed substitutes, as in packaged apps), and `worker_threads` workers (each its own engine and goroutine; a worker ends when its loop is idle, its `parentPort` holding it while it has message listeners; build-time writes, temp files included via a project-local TMPDIR, stay inside the project). |
+| `internal/jsvm` | JavaScript engine boundary. The Ekuma implementation binds compiled scripts in each VM, uses native promise resolvers, and wraps live WebAssembly memory in Go-backed ArrayBuffers. Ordinary byte buffers use transferable JavaScript storage. |
+| `internal/jshost` | Build-time JavaScript host. It loads next.config and middleware matchers, bridges esbuild plugins and webpack loaders, and runs `worker_threads` workers in their own VMs. Computed `require(x)` and `import(x)` in bundled modules resolve relative paths from the caller's file. A `.node` addon throws Node's `ERR_DLOPEN_FAILED`. The host supplies Go-backed substitutes for sharp and better-sqlite3, as in packaged apps. A worker stays alive while its `parentPort` has message listeners. Build-time writes, including temporary files via a project-local TMPDIR, stay inside the project. |
 | `internal/frameworks/next` | The Next.js compiler: app tree scan, layers, RSC transforms, server actions, the browser build, CSS, manifests, the entry dispatcher. next.config's `webpack()` hook runs against a stand-in webpack config; the loaders, aliases, fallbacks and definitions it adds are applied (`webpackhook.go`). |
 | `internal/frameworks/vite` | Vite builds: Vite's own JS (config, builder, plugins) on the build host, with Rolldown replaced by a facade over esbuild (see "Vite builds"). |
-| `internal/wasm` | The WebAssembly JS API for build-time Sobek, on wazero (threads, WASI), so WebAssembly builds of native addons (Tailwind's oxide, lightningcss, Qwik's optimizer) run unmodified. Tables are reached through accessor functions og adds to the module (wazero exposes none); externref values map to JS values. |
-| `internal/gojatarget`, `internal/bundle` | Shared esbuild settings for Sobek; RSC helpers. |
-| `runtime/engine` | One Sobek VM and its event loop, plus AsyncLocalStorage on Sobek's `AsyncContextTracker` (Sobek's API). |
-| `runtime/webapi` | WinterCG Web APIs: Go hosts (fetch, URL, encoding, crypto, server) and a TypeScript prelude (`js/src`, generated into `prelude.js`). The prelude also supplies `Intl` (vendored FormatJS, loaded lazily) and a `RegExp` that adds the `v` flag (its set notation translated to `u` patterns, `js/src/unicodesets.ts`; properties of strings from Go tables generated from Unicode's emoji data, `emoji_tables.go`) and the `d` flag, which Sobek lacks. |
+| `internal/wasm` | The build host's WebAssembly JS API, backed by wazero with threads and WASI. WebAssembly builds of addons such as Tailwind's oxide, lightningcss, and Qwik's optimizer run unmodified. Oganesson adds accessor functions to the module for tables and maps externref values to JS values. |
+| `internal/gojatarget`, `internal/bundle` | Shared esbuild settings for engine-bound bundles and RSC helpers. |
+| `runtime/engine` | One JavaScript VM and its event loop. AsyncLocalStorage uses Sobek's `AsyncContextTracker` or Ekuma's continuation data. |
+| `runtime/webapi` | WinterCG Web APIs and their Go hosts (fetch, URL, encoding, crypto, server). The TypeScript prelude in `js/src` generates one bundle per JS engine. Sobek's bundle supplies lazy FormatJS `Intl`, a `RegExp` fallback for the `v` and `d` flags, and a Proxy workaround. The RegExp fallback translates Unicode set notation to `u` patterns and uses the generated Unicode emoji tables for properties of strings. Ekuma uses its native built-ins for these features. |
 | `runtime/nodeshim` | Node built-ins as an unenv preset with Oganesson overrides; `stream` and `string_decoder` are the vendored npm copies of Node's own (unenv's are stubs); `path`, the web stream adapters and `fs.ReadStream` / `WriteStream` are Node's `lib/` files, their internal requires (primordials, validators, errors) shimmed by `js/node_internals.js` and `js/node_stream_internals.js`; `http` runs servers inside a request's VM; `net` / `tls` are client sockets over Go connections (`net.go`; chains verified in Go with OpenSSL's codes, identity by Node's `checkServerIdentity`), through a process-wide pool that keeps PostgreSQL and MySQL sessions across request VMs at the protocol level (`netpool.go`: handshakes recorded and replayed, sessions reset between clients); zlib is Go's compress/* and andybalholm/brotli; `assert` is the callable function. |
 | `runtime/codec` | Streaming compressors / decompressors (Go's compress/*, andybalholm/brotli) for `CompressionStream` and `node:zlib` streams. |
 | `runtime/vfs` | The runtime's `node:fs`: the files packaged with the app (a Next app's traced files, a server program's build outputs) under an in-memory writable layer (`Overlay`), process-wide, mounted at `/` (the runtime's cwd); SQLite database files live in it too. |
@@ -47,7 +50,7 @@ Sobek lacks async generators, ESM (as og uses it), the RegExp `v` and `d` flags,
 ## Build pipeline (`og build`)
 
 1. **Configuration.**
-   - `internal/jshost` evaluates the user's next.config in Sobek and normalizes it through Next's own `loadConfig`.
+   - `internal/jshost` evaluates the user's next.config and normalizes it through Next's own `loadConfig`.
    - It computes Next's edge and client `define`s with `getDefineEnv`.
    - If a `og.config.*` exists, a long-lived plugin host starts (see Extensibility).
 2. **Tree scan.** The app directory becomes Next's loader trees (layouts, pages, boundaries, route handlers) plus the route list.
@@ -97,13 +100,13 @@ dependency, or a recognized Vite-based framework dependency and no Next.js.
     - build import analysis: the `__vitePreload` wrapping of dynamic imports, whose dependency lists Vite's JS fills in;
     - alias, `import.meta.glob`, dynamic-import variables: Vite's own JS implementations, kept by load-time patches of Vite.
   - **`rolldown/parseAst`** is acorn (vendored).
-- **Vite's source is patched while it is bundled** (`host.go`): those `applyToEnvironment` switches, and `fn.toString()` of Vite's browser helpers replaced by their original source text (bundling for Sobek rewrites `import.meta`).
-- **Server environments** (e.g. TanStack Start's `ssr`): the facade builds them split as Rolldown does (modules shared by entries are one instance), with Node built-ins and og's own modules (`og:kv`) external. Object- and array-valued defines become `globalThis.__og_define_<n>` set by each chunk's banner, which avoids an esbuild renamer race in split unminified builds. `vite.Build` takes the first server consumer's written entry, whose default export has `fetch(request)`, and bundles it for Sobek (`server.go`):
+- **Vite's source is patched while it is bundled** (`host.go`): those `applyToEnvironment` switches, and `fn.toString()` of Vite's browser helpers replaced by their original source text (bundling for the build host rewrites `import.meta`).
+- **Server environments** (e.g. TanStack Start's `ssr`): the facade builds them split as Rolldown does (modules shared by entries are one instance), with Node built-ins and og's own modules (`og:kv`) external. Object- and array-valued defines become `globalThis.__og_define_<n>` set by each chunk's banner, which avoids an esbuild renamer race in split unminified builds. `vite.Build` takes the first server consumer's written entry, whose default export has `fetch(request)`, and bundles it for the runtime (`server.go`):
   - Node built-ins come from `runtime/nodeshim`;
   - esbuild's ESM `__require("x")` shim calls in the output become plain `require("x")` again, so they resolve statically.
 - **The project's scripts** (`scripts.go`): `og build` runs the `vite build` commands of the `build` script (through `npm run` / pnpm / yarn chains, with their CLI flags merged over the config as Vite merges inline config, and `createBuilder(…, null)` as the CLI passes).
 - **Server programs** (`program.go`): when the build runs `vite build --ssr` and the `preview` / `start` / `serve` script runs `node <file>` (Express, as create-vite-extra's SSR templates), that program is the server:
-  - it is bundled for Sobek as ESM wrapped in an async function (it uses top-level await); dynamically imported devDependencies (the dev branch's `import("vite")`) become modules that throw;
+  - it is bundled as ESM wrapped in an async function (it uses top-level await); dynamically imported devDependencies (the dev branch's `import("vite")`) become modules that throw;
   - the build outputs are packaged under `files/` and mounted read-only at `/`, the runtime's cwd (`runtime/vfs`), so `./dist/client/index.html` and sirv's reads work;
   - per request the program runs in the request's VM; `http.createServer(...).listen()` opens nothing, and the request is handed to its listener as `IncomingMessage` / `ServerResponse` whose body streams into the web Response (`runtime/nodeshim/js/http.js`);
   - the program serves every request itself, static files included;
@@ -120,7 +123,7 @@ dependency, or a recognized Vite-based framework dependency and no Next.js.
 - **Astro** (`astro.go`): `astro build()` runs on the build host with the project's `astro.config.*` bundled into the host entry (`configFile: false`). Static output is served as a multi-page app (`/about` is `about/index.html`); with `@astrojs/node` standalone, `dist/server/entry.mjs` is a server program as above.
 - **VitePress** (`vitepress.go`): a declared `vitepress` dependency selects the Vite path even without a direct `vite` dependency. VitePress's own `build()` API runs on the build host, performs its client/server Vite builds and static page rendering, and its configured output becomes a multi-page static app. Unresolved virtual IDs such as `@siteData` continue through the plugin chain before the SSR unresolved-import fallback can externalize them; advanced chunk-name callbacks receive the Rolldown chunk context VitePress uses to inspect module graphs.
 - **SSR externals**: server environments keep bare imports of `node_modules` packages as imports (Vite's SSR externalization, with `ssr.noExternal` / `external` matched by package name); the server bundle resolves them.
-- **Preview server** (`preview.go`): tools that render through `vite preview` get og's own serving instead: the server entry bundled for Sobek and the client output, behind `runtime/app` on a local port. TanStack Start's prerendering and SPA shell use it (a load-time patch of its `startPreviewServer`), so what is prerendered is what the binary renders.
+- **Preview server** (`preview.go`): tools that render through `vite preview` use og's serving on a local port. `runtime/app` serves the client output and the server entry bundled for the build host's engine. TanStack Start's prerendering and SPA shell use it through a load-time patch of `startPreviewServer`.
 - **TanStack Start:**
   - three environments with the RSC variant (`rsc`, then `client`, then `ssr`; `@vitejs/plugin-rsc` orchestrates them); the `ssr` output imports the `rsc` output, and both end up in `server.js`;
   - SPA mode: the prerendered `_shell.html` is a static file, and pages are rendered as Start's own server renders them (`TSS_SHELL` is set only for the shell's prerender, never at run time).
@@ -133,7 +136,7 @@ dependency, or a recognized Vite-based framework dependency and no Next.js.
 
 ## Runtime
 
-- **Per-request isolation.** `runtime/server` compiles the bundle once per process. Each request then gets a **fresh Sobek VM**: the Web APIs are installed, the program runs, and a Request is dispatched to the bundle's entry. Module-level state never survives a request. Measured costs are roughly 670 ms once for compilation and roughly 14 ms per request for VM setup.
+- **Per-request isolation.** `runtime/server` compiles the bundle once per process. Each request gets a fresh VM where the host installs the Web APIs, runs the program, and dispatches the Request to the bundle's entry. Module-level state never survives a request. With Sobek, measured costs are roughly 670 ms once for compilation and roughly 14 ms per request for VM setup.
 - **Shared state lives in Go.** The only cross-request state is in Go-backed services, injected through `Handler.Extensions`:
   - `og:kv` (one in-memory store per process);
   - the ISR cache (`og:cache-handler`, backing Next's cache handler).
@@ -151,7 +154,7 @@ dependency, or a recognized Vite-based framework dependency and no Next.js.
 
 ## Build-time JavaScript host (`internal/jshost`)
 
-Build tooling expects Node, and jshost provides a Node-like Sobek environment for it:
+Build tooling expects Node, and jshost provides a Node-like environment on either backend:
 
 - Bundling uses esbuild with condition `node`.
 - Dynamic `require` (and computed `import()`) is goja_nodejs/require extended with:

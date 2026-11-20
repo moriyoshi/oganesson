@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/internal/wasm"
 )
 
@@ -69,7 +69,7 @@ func TestPluginBridge(t *testing.T) {
 	if len(res.Errors) > 0 {
 		t.Fatalf("build: %s", res.Errors[0].Text)
 	}
-	vm := sobek.New()
+	vm := jsvm.New()
 	if _, err := vm.RunString(string(res.OutputFiles[0].Contents)); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestEsbuildPluginPostcss(t *testing.T) {
 			t.Errorf("bundle lacks %q:\n%s", want, out)
 		}
 	}
-	vm := sobek.New()
+	vm := jsvm.New()
 	_, _ = vm.RunString(`globalThis.document = { body: { appendChild() {} }, getElementById() { return null; }, createElement() { return {}; } };`)
 	if _, err := vm.RunString(out); err != nil {
 		t.Fatal(err)
@@ -344,7 +344,7 @@ func TestPluginHostEsbuildBuildSync(t *testing.T) {
 	if len(res.Errors) > 0 {
 		t.Fatalf("build: %s", res.Errors[0].Text)
 	}
-	vm := sobek.New()
+	vm := jsvm.New()
 	if _, err := vm.RunString(string(res.OutputFiles[0].Contents)); err != nil {
 		t.Fatal(err)
 	}

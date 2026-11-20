@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -19,7 +19,7 @@ import (
 func Install(e *engine.Engine, fsys fs.FS) error {
 	vm := e.VM
 	o := vm.NewObject()
-	rec := func(code, msg, syscall, p string) sobek.Value {
+	rec := func(code, msg, syscall, p string) jsvm.Value {
 		r := vm.NewObject()
 		_ = r.Set("error", code)
 		_ = r.Set("message", code+": "+msg+", "+syscall+" '"+p+"'")
@@ -27,7 +27,7 @@ func Install(e *engine.Engine, fsys fs.FS) error {
 		_ = r.Set("path", p)
 		return r
 	}
-	errRec := func(err error, op, p string) sobek.Value {
+	errRec := func(err error, op, p string) jsvm.Value {
 		// The errnos first: syscall.Errno matches fs.ErrExist for
 		// ENOTEMPTY too.
 		code := "EIO"
@@ -56,7 +56,7 @@ func Install(e *engine.Engine, fsys fs.FS) error {
 		}
 		return "."
 	}
-	statRec := func(st fs.FileInfo) sobek.Value {
+	statRec := func(st fs.FileInfo) jsvm.Value {
 		r := vm.NewObject()
 		_ = r.Set("isFile", st.Mode().IsRegular())
 		_ = r.Set("isDirectory", st.IsDir())
@@ -74,21 +74,21 @@ func Install(e *engine.Engine, fsys fs.FS) error {
 		_ = r.Set("mode", mode)
 		return r
 	}
-	_ = o.Set("stat", func(p string, follow bool) sobek.Value {
+	_ = o.Set("stat", func(p string, follow bool) jsvm.Value {
 		st, err := fs.Stat(fsys, name(p))
 		if err != nil {
 			return errRec(err, "stat", p)
 		}
 		return statRec(st)
 	})
-	_ = o.Set("readFile", func(p string) sobek.Value {
+	_ = o.Set("readFile", func(p string) jsvm.Value {
 		b, err := fs.ReadFile(fsys, name(p))
 		if err != nil {
 			return errRec(err, "open", p)
 		}
 		return vm.ToValue(vm.NewArrayBuffer(b))
 	})
-	_ = o.Set("readdir", func(p string) sobek.Value {
+	_ = o.Set("readdir", func(p string) jsvm.Value {
 		entries, err := fs.ReadDir(fsys, name(p))
 		if err != nil {
 			return errRec(err, "scandir", p)
@@ -104,7 +104,7 @@ func Install(e *engine.Engine, fsys fs.FS) error {
 		}
 		return vm.ToValue(out)
 	})
-	_ = o.Set("realpath", func(p string) sobek.Value {
+	_ = o.Set("realpath", func(p string) jsvm.Value {
 		if _, err := fs.Stat(fsys, name(p)); err != nil {
 			return errRec(err, "realpath", p)
 		}
@@ -116,8 +116,8 @@ func Install(e *engine.Engine, fsys fs.FS) error {
 	if ov, ok := fsys.(*Overlay); ok {
 		installWrites(vm, o, ov, name, errRec)
 	} else {
-		readOnly := func(syscall string) func(p string) sobek.Value {
-			return func(p string) sobek.Value { return rec("EROFS", "read-only file system", syscall, p) }
+		readOnly := func(syscall string) func(p string) jsvm.Value {
+			return func(p string) jsvm.Value { return rec("EROFS", "read-only file system", syscall, p) }
 		}
 		for _, op := range []string{"writeFile", "mkdir", "rm", "rename", "chmod"} {
 			_ = o.Set(op, readOnly(op))
@@ -127,20 +127,20 @@ func Install(e *engine.Engine, fsys fs.FS) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(install)
-	_, err = fn(sobek.Undefined(), o)
+	fn, _ := jsvm.AssertFunction(install)
+	_, err = fn(jsvm.Undefined(), o)
 	return err
 }
 
 // installWrites gives og.fs the overlay's write operations (the build
 // host's interface: writeFile(path, bytes, append), mkdir(path, recursive),
 // rm(path, recursive), rename(from, to), chmod(path, mode)).
-func installWrites(vm *sobek.Runtime, o *sobek.Object, ov *Overlay, name func(string) string, errRec func(error, string, string) sobek.Value) {
-	ok := sobek.Undefined()
-	_ = o.Set("writeFile", func(p string, data sobek.Value, appendTo bool) sobek.Value {
+func installWrites(vm *jsvm.Runtime, o *jsvm.Object, ov *Overlay, name func(string) string, errRec func(error, string, string) jsvm.Value) {
+	ok := jsvm.Undefined()
+	_ = o.Set("writeFile", func(p string, data jsvm.Value, appendTo bool) jsvm.Value {
 		var b []byte
 		switch v := data.Export().(type) {
-		case sobek.ArrayBuffer:
+		case jsvm.ArrayBuffer:
 			b = v.Bytes()
 		case []byte:
 			b = v
@@ -156,25 +156,25 @@ func installWrites(vm *sobek.Runtime, o *sobek.Object, ov *Overlay, name func(st
 		}
 		return ok
 	})
-	_ = o.Set("mkdir", func(p string, recursive bool) sobek.Value {
+	_ = o.Set("mkdir", func(p string, recursive bool) jsvm.Value {
 		if err := ov.Mkdir(name(p), recursive); err != nil {
 			return errRec(err, "mkdir", p)
 		}
 		return ok
 	})
-	_ = o.Set("rm", func(p string, recursive bool) sobek.Value {
+	_ = o.Set("rm", func(p string, recursive bool) jsvm.Value {
 		if err := ov.Remove(name(p), recursive); err != nil {
 			return errRec(err, "rm", p)
 		}
 		return ok
 	})
-	_ = o.Set("rename", func(from, to string) sobek.Value {
+	_ = o.Set("rename", func(from, to string) jsvm.Value {
 		if err := ov.Rename(name(from), name(to)); err != nil {
 			return errRec(err, "rename", from)
 		}
 		return ok
 	})
-	_ = o.Set("chmod", func(p string, mode int64) sobek.Value {
+	_ = o.Set("chmod", func(p string, mode int64) jsvm.Value {
 		if err := ov.Chmod(name(p), fs.FileMode(mode)); err != nil {
 			return errRec(err, "chmod", p)
 		}

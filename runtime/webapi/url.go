@@ -3,7 +3,7 @@ package webapi
 import (
 	"strconv"
 
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	whatwg "github.com/nlnwa/whatwg-url/url"
 )
 
@@ -11,28 +11,28 @@ var urlParser = whatwg.NewParser()
 
 func (h *host) installURL() {
 	// urlParse(input, base?) -> record | null
-	h.set("urlParse", func(fc sobek.FunctionCall) sobek.Value {
+	h.set("urlParse", func(fc jsvm.FunctionCall) jsvm.Value {
 		input := fc.Argument(0).String()
 		var (
 			u   *whatwg.Url
 			err error
 		)
-		if base := fc.Argument(1); sobek.IsUndefined(base) {
+		if base := fc.Argument(1); jsvm.IsUndefined(base) {
 			u, err = urlParser.Parse(input)
 		} else {
 			u, err = urlParser.ParseRef(base.String(), input)
 		}
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		return h.urlRecord(u)
 	})
 	// urlSet(href, component, value) -> record. Invalid values are ignored,
 	// exactly as the URL setters specify.
-	h.set("urlSet", func(href, component, value string) sobek.Value {
+	h.set("urlSet", func(href, component, value string) jsvm.Value {
 		u, err := urlParser.Parse(href)
 		if err != nil {
-			return sobek.Null()
+			return jsvm.Null()
 		}
 		switch component {
 		case "protocol":
@@ -58,7 +58,7 @@ func (h *host) installURL() {
 	})
 }
 
-func (h *host) urlRecord(u *whatwg.Url) sobek.Value {
+func (h *host) urlRecord(u *whatwg.Url) jsvm.Value {
 	o := h.vm.NewObject()
 	_ = o.Set("href", u.Href(false))
 	_ = o.Set("origin", origin(u))

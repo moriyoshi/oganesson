@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
 	"github.com/moriyoshi/oganesson/internal/gojatarget"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/nodeshim"
 	"github.com/moriyoshi/oganesson/third_party/goja_nodejs/require"
 )
@@ -467,20 +467,20 @@ const SharedModules = "og.sharedModules"
 // the .cjs/.mjs/.ts extensions, and Node built-ins come from
 // runtime/nodeshim. Bundled code (which has no module file of its own)
 // resolves from the project; module.createRequire(url) from the URL.
-func (h *Host) installRequire(vm *sobek.Runtime) error {
+func (h *Host) installRequire(vm *jsvm.Runtime) error {
 	sharedObj, err := vm.RunString(`() => globalThis[Symbol.for("` + SharedModules + `")]`)
 	if err != nil {
 		return err
 	}
-	sharedRegistry, _ := sobek.AssertFunction(sharedObj)
+	sharedRegistry, _ := jsvm.AssertFunction(sharedObj)
 	// shared returns the registered module id names: by bare specifier, or
 	// by the file that specifier resolves to from the project (Node's
 	// module cache is keyed on the file: Vite's config loader imports
 	// "vite" by its file URL).
 	sharedFiles := map[string]string{}
-	registry := func() *sobek.Object {
-		v, err := sharedRegistry(sobek.Undefined())
-		if o, ok := v.(*sobek.Object); ok && err == nil {
+	registry := func() *jsvm.Object {
+		v, err := sharedRegistry(jsvm.Undefined())
+		if o, ok := v.(*jsvm.Object); ok && err == nil {
 			return o
 		}
 		return nil
@@ -503,7 +503,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 		}
 		return ""
 	}
-	shared := func(id string) sobek.Value {
+	shared := func(id string) jsvm.Value {
 		reg := registry()
 		if reg == nil {
 			return nil
@@ -511,7 +511,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 		if filepath.IsAbs(id) {
 			id = sharedName(id)
 		}
-		if m := reg.Get(id); id != "" && m != nil && !sobek.IsUndefined(m) {
+		if m := reg.Get(id); id != "" && m != nil && !jsvm.IsUndefined(m) {
 			return m
 		}
 		return nil
@@ -559,13 +559,13 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 	// checks to treat optional dependencies as absent.
 	// og.esmRequire(require, filename): the require of a converted ES module
 	// (withESMRequire), resolving packages with import conditions first.
-	esmRequire := func(call sobek.FunctionCall) sobek.Value {
-		orig, ok := sobek.AssertFunction(call.Argument(0))
+	esmRequire := func(call jsvm.FunctionCall) jsvm.Value {
+		orig, ok := jsvm.AssertFunction(call.Argument(0))
 		if !ok {
 			return call.Argument(0)
 		}
 		dir := filepath.Dir(call.Argument(1).String())
-		return vm.ToValue(func(c sobek.FunctionCall) sobek.Value {
+		return vm.ToValue(func(c jsvm.FunctionCall) jsvm.Value {
 			id := c.Argument(0).String()
 			target := id
 			if !nodeshim.Builtins[strings.TrimPrefix(id, "node:")] && !strings.HasPrefix(id, "file://") {
@@ -573,7 +573,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 					target = r
 				}
 			}
-			v, err := orig(sobek.Undefined(), vm.ToValue(target))
+			v, err := orig(jsvm.Undefined(), vm.ToValue(target))
 			if err != nil {
 				panic(err)
 			}
@@ -585,7 +585,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 	}
 	// og.importFrom(specifier, dir): a relative import() specifier resolved
 	// from dir (jshost.localizeImports); others unchanged.
-	importFrom := func(spec sobek.Value, dir string) sobek.Value {
+	importFrom := func(spec jsvm.Value, dir string) jsvm.Value {
 		if s, ok := spec.Export().(string); ok && (strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../")) {
 			return vm.ToValue(filepath.Join(dir, s))
 		}
@@ -594,7 +594,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 	if err := defineSymbol(vm, "og.importFrom", vm.ToValue(importFrom)); err != nil {
 		return err
 	}
-	cjsRequire := vm.ToValue(func(call sobek.FunctionCall) sobek.Value {
+	cjsRequire := vm.ToValue(func(call jsvm.FunctionCall) jsvm.Value {
 		id := call.Argument(0).String()
 		// import() (lowered to require by esbuild) takes file: URLs, as in
 		// Node (Astro imports its config entry point by URL).
@@ -631,11 +631,11 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 		// A JavaScript exception propagates as is; any other loader error
 		// (a module that does not parse) becomes one, which the caller can
 		// catch, rather than a Go panic out of the engine.
-		var ex *sobek.Exception
+		var ex *jsvm.Exception
 		if errors.As(err, &ex) {
 			panic(err)
 		}
-		var syn *sobek.CompilerSyntaxError
+		var syn *jsvm.CompilerSyntaxError
 		var msyn *moduleSyntaxError
 		if errors.As(err, &syn) {
 			panic(jsError(vm, "SyntaxError", err.Error()))
@@ -659,7 +659,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 	// The global require.resolve resolves from the calling module's file,
 	// as goja_nodejs's require does (and as Node's per-module require
 	// does), or from the project for code without a module file.
-	callerResolve := func(call sobek.FunctionCall) sobek.Value {
+	callerResolve := func(call jsvm.FunctionCall) jsvm.Value {
 		id := call.Argument(0).String()
 		var dirs []string
 		if opts, ok := call.Argument(1).Export().(map[string]any); ok {
@@ -671,7 +671,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 		}
 		if len(dirs) == 0 {
 			dir := h.Dir
-			var buf [2]sobek.StackFrame
+			var buf [2]jsvm.StackFrame
 			if frames := vm.CaptureCallStack(2, buf[:0]); len(frames) == 2 {
 				if d := filepath.Dir(frames[1].SrcName()); filepath.IsAbs(d) {
 					dir = d
@@ -696,7 +696,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 	// so og.import (requireFront) can load a top-level-await module through
 	// the async path and anything else through the synchronous require.
 	tlaOf := map[string]bool{}
-	resolveDyn := func(call sobek.FunctionCall) sobek.Value {
+	resolveDyn := func(call jsvm.FunctionCall) jsvm.Value {
 		id := call.Argument(0).String()
 		if strings.HasPrefix(id, "file://") {
 			if u, err := url.Parse(id); err == nil {
@@ -732,7 +732,7 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 	// records the namespace under Symbol.for("og.dynModules")), evaluate it on
 	// this VM, and return the promise of its evaluation. requireFront's
 	// og.import reads the namespace once the promise settles.
-	runTLA := func(call sobek.FunctionCall) sobek.Value {
+	runTLA := func(call jsvm.FunctionCall) jsvm.Value {
 		path := call.Argument(0).String()
 		stdin := fmt.Sprintf("import * as __ogDynNS from %[1]s;\n(globalThis[Symbol.for(%[2]q)] ??= Object.create(null))[%[1]s] = __ogDynNS;\n",
 			jsonString(path), "og.dynModules")
@@ -756,8 +756,8 @@ func (h *Host) installRequire(vm *sobek.Runtime) error {
 	if err != nil {
 		return err
 	}
-	install, _ := sobek.AssertFunction(fn)
-	_, err = install(sobek.Undefined(), cjsRequire, vm.ToValue(resolve), vm.ToValue(h.Dir), vm.ToValue(callerResolve), vm.ToValue(resolveDyn), vm.ToValue(runTLA))
+	install, _ := jsvm.AssertFunction(fn)
+	_, err = install(jsvm.Undefined(), cjsRequire, vm.ToValue(resolve), vm.ToValue(h.Dir), vm.ToValue(callerResolve), vm.ToValue(resolveDyn), vm.ToValue(runTLA))
 	return err
 }
 
@@ -803,7 +803,7 @@ func resolvePathHook(base, p string) string {
 
 // builtinLoader bundles a nodeshim module on first require.
 func (h *Host) builtinLoader(name string) require.ModuleLoader {
-	return func(vm *sobek.Runtime, module *sobek.Object) {
+	return func(vm *jsvm.Runtime, module *jsvm.Object) {
 		code, err := h.bundle(fmt.Sprintf("globalThis.__ogBuiltin = require(%q);", "node:"+name), nil)
 		if err != nil {
 			panic(vm.NewGoError(err))
@@ -899,8 +899,8 @@ const requireFront = `(function (cjsRequire, resolve, root, callerResolve, resol
 
 // jsError is a new instance of the global error class ctor (Error,
 // SyntaxError) with message, as Node throws (not the engine's GoError).
-func jsError(vm *sobek.Runtime, ctor, message string) *sobek.Object {
-	c, _ := vm.Get(ctor).(*sobek.Object)
+func jsError(vm *jsvm.Runtime, ctor, message string) *jsvm.Object {
+	c, _ := vm.Get(ctor).(*jsvm.Object)
 	if c != nil {
 		if o, err := vm.New(c, vm.ToValue(message)); err == nil {
 			return o

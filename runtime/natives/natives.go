@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/grafana/sobek"
+	"github.com/moriyoshi/oganesson/internal/jsvm"
 	"github.com/moriyoshi/oganesson/runtime/engine"
 )
 
@@ -213,7 +213,7 @@ func Install(e *engine.Engine, svc *Services) error {
 	if err != nil {
 		return err
 	}
-	fn, _ := sobek.AssertFunction(define)
-	_, err = fn(sobek.Undefined(), sharpHost, sqliteHost, pgHost, mysqlHost)
+	fn, _ := jsvm.AssertFunction(define)
+	_, err = fn(jsvm.Undefined(), sharpHost, sqliteHost, pgHost, mysqlHost)
 	return err
 }
