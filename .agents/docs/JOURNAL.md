@@ -800,3 +800,22 @@ disabled Prisma generation. Its SQLite, libSQL, MySQL, and PostgreSQL
 tests passed on both backends, with the `aot` tag for PGlite. The separate
 `pg` and `postgres.js` shim suites also passed against PGlite. The
 full-fixture attempts were stopped before all driver routes completed.
+
+## Tailwind WASI package installation in CI · 2026-11-20
+
+The core, next-build, and next CI shards failed building the Next feature
+fixture. Tailwind's Oxide loader could not find a binding. A clean install
+reproduced the missing package. The registry manifest for
+`@tailwindcss/oxide-wasm32-wasi@4.3.5` omits the platform metadata that the
+installer expected, although `@tailwindcss/oxide` still declares it as an
+optional dependency. Previously prepared fixtures had the binding installed.
+
+`internal/install` now accepts an explicitly named `-wasm32-wasi` optional
+build when its manifest omits both CPU and OS metadata. The registry test
+failed before the fix because the untagged WASI package was missing. It
+passed with the fix, and an explicitly x64 package with the same suffix
+continued to be excluded. The installer source is part of the fixture
+cache key, so CI will reinstall its fixture dependencies.
+
+A clean registry install then pulled the Oxide WASI binary, and the
+`TestOxideIgnoreRules` and `TestNextFontGoogle` host tests passed.

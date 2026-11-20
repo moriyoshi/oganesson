@@ -282,16 +282,23 @@ func TestNpmAlias(t *testing.T) {
 	}
 }
 
-// Optional dependencies are native builds and skipped, except WebAssembly
-// builds (cpu wasm32) and the wasm substitutes of known native addons.
+// Optional native builds are skipped. Explicit WASI builds can omit cpu
+// metadata, and known native addons can name a separate wasm substitute.
 func TestWasmBuilds(t *testing.T) {
 	srv := fakeRegistry(t, []fakePkg{
 		{name: "addon", version: "1.0.0", optional: map[string]string{
-			"addon-darwin-arm64": "1.0.0", "addon-wasm32-wasi": "1.0.0", "addon-wasm32-fake": "1.0.0", "addon-wasm32-missing": "1.0.0",
+			"addon-darwin-arm64":   "1.0.0",
+			"addon-wasm32-wasi":    "1.0.0",
+			"addon-wasm32-fake":    "1.0.0",
+			"addon-wasm32-missing": "1.0.0",
+			"untagged-wasm32-wasi": "1.0.0",
+			"native-wasm32-wasi":   "1.0.0",
 		}},
 		{name: "addon-darwin-arm64", version: "1.0.0", cpu: []string{"arm64"}},
 		{name: "addon-wasm32-wasi", version: "1.0.0", cpu: []string{"wasm32"}},
 		{name: "addon-wasm32-fake", version: "1.0.0", cpu: []string{"x64"}},
+		{name: "untagged-wasm32-wasi", version: "1.0.0"},
+		{name: "native-wasm32-wasi", version: "1.0.0", cpu: []string{"x64"}},
 		{name: "lightningcss", version: "1.32.0"},
 		{name: "lightningcss-wasm", version: "1.31.0"},
 		{name: "lightningcss-wasm", version: "1.32.0"},
@@ -307,6 +314,8 @@ func TestWasmBuilds(t *testing.T) {
 		"addon-darwin-arm64":   "",
 		"addon-wasm32-fake":    "",
 		"addon-wasm32-missing": "",
+		"untagged-wasm32-wasi": "1.0.0",
+		"native-wasm32-wasi":   "",
 		"lightningcss":         "1.32.0",
 		"lightningcss-wasm":    "1.32.0",
 	} {
